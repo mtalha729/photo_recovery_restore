@@ -193,6 +193,19 @@ void main() {
     expect(loader, isNot(contains('openInputStream')));
   });
 
+  test('source export includes the Android Gradle wrapper', () {
+    expect(File('android/gradlew').existsSync(), isTrue);
+    expect(File('android/gradlew.bat').existsSync(), isTrue);
+    expect(
+      File('android/gradle/wrapper/gradle-wrapper.jar').existsSync(),
+      isTrue,
+    );
+    expect(
+      File('android/gradle/wrapper/gradle-wrapper.properties').existsSync(),
+      isTrue,
+    );
+  });
+
   test(
     'launcher uses the selected artwork across fallbacks and adaptive icon',
     () {

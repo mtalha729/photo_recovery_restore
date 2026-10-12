@@ -4,6 +4,11 @@ gradle-wrapper.jar
 /gradlew
 /gradlew.bat
 /local.properties
+
+# Keep the Gradle wrapper in source exports so Android builds are reproducible.
+!/gradlew
+!/gradlew.bat
+!gradle/wrapper/gradle-wrapper.jar
 GeneratedPluginRegistrant.java
 .cxx/
 

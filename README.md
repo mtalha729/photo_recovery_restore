@@ -115,5 +115,8 @@ flutter analyze
 flutter test
 ```
 
-The Android package/application ID is `com.photorecoveryrestore.app`. Release
-signing is intentionally supplied outside source control.
+The Android package/application ID is `com.photorecoveryrestore.app`. The
+project includes the Gradle wrapper under `android/` (`gradlew`, `gradlew.bat`,
+and `gradle/wrapper/gradle-wrapper.jar`) so the Android project can be opened
+or built from a clean source export. Release signing is intentionally supplied
+outside source control.
