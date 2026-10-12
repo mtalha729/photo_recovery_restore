@@ -29,9 +29,11 @@ that Google Play approval is guaranteed.
   provide full-library visibility for that exclusion and analysis.
 - Limited visual-media access is represented as limited access. The app must not
   claim a full scan, infer deletion, or present inaccessible media as deleted.
-- Custom folders use user-authorized Storage Access Framework scopes. The app
-  does not request All files access; it scans only images exposed by MediaStore
-  and folders explicitly selected by the user.
+- Custom folders use user-authorized Storage Access Framework scopes. The
+  production/release variant does not request All files access; it scans only
+  images exposed by MediaStore and folders explicitly selected by the user.
+  The debug-only manifest keeps the special permission solely for internal
+  bounded traversal testing and must never be used for a Play upload.
 - Main-manifest permissions are limited to `READ_MEDIA_IMAGES`,
   `READ_MEDIA_VISUAL_USER_SELECTED`, legacy `READ_EXTERNAL_STORAGE` through API
   32, and legacy `WRITE_EXTERNAL_STORAGE` through API 28. There is no all-files,
@@ -41,15 +43,21 @@ that Google Play approval is guaranteed.
 - Review and submit the Play Console Photo and Video Permissions declaration for
   `READ_MEDIA_IMAGES`, explaining the core recovery/exclusion use case. Also
   review every permission in the final merged manifest and release artifact.
-- No `MANAGE_EXTERNAL_STORAGE` declaration is present. Selected custom folders
-  use the Storage Access Framework instead.
+- No `MANAGE_EXTERNAL_STORAGE` declaration is present in the production/release
+  manifest. Selected custom folders use the Storage Access Framework instead.
 
 ## Data safety and privacy
 
 - Photos and recovery metadata are processed locally by the current app.
 - Recovery Shield stores opted-in protected copies in local app-private storage;
-  they are not uploaded by this app and are removed when the app is uninstalled.
+  the production manifest disables Android app backup for those copies. They are
+  not uploaded by this app and are removed when the app is uninstalled.
 - No cloud upload, ads, analytics SDK, or network feature is currently included.
+- The app includes an in-app privacy-policy screen and the repository contains
+  `PRIVACY_POLICY.md`. Before publishing, host the final policy at a stable
+  public HTTPS URL, add the same URL to the Play listing and any required in-app
+  legal surface, and replace the generic support-contact wording with the
+  developer's real support channel if needed.
 - Before publishing, the app owner must complete Play Console Data safety,
   privacy-policy, permissions, and content declarations using the final binary
   and any services added after this audit. Do not make declarations based only

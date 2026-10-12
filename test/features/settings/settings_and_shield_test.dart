@@ -90,6 +90,26 @@ void main() {
     });
   }
 
+  testWidgets('privacy policy is available inside the app', (tester) async {
+    await tester.pumpWidget(
+      _app(
+        SettingsScreen(
+          preferences: AppPreferencesController(_PreferencesStore()),
+          mediaAccess: _Access(MediaAccessStatus.denied),
+          shieldManager: _ShieldManager(const []),
+          onReplayOnboarding: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Privacy policy'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Photo Recovery & Restore privacy policy'), findsOneWidget);
+    expect(find.textContaining('does not upload'), findsOneWidget);
+  });
+
   testWidgets('theme selection persists and reduced motion is saved', (
     tester,
   ) async {

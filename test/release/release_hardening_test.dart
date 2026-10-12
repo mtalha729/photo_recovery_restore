@@ -47,8 +47,40 @@ void main() {
       );
       expect(manifest, isNot(contains('MANAGE_MEDIA')));
       expect(manifest, isNot(contains('android.permission.INTERNET')));
+      expect(manifest, contains('android:allowBackup="false"'));
+      expect(manifest, contains('android:usesCleartextTraffic="false"'));
     },
   );
+
+  test('production permission sources stay Play-scoped', () {
+    final mainManifest = File('android/app/src/main/AndroidManifest.xml')
+        .readAsStringSync();
+    final debugManifest = File('android/app/src/debug/AndroidManifest.xml')
+        .readAsStringSync();
+    final profileManifest = File('android/app/src/profile/AndroidManifest.xml')
+        .readAsStringSync();
+    final buildFile = File('android/app/build.gradle.kts').readAsStringSync();
+
+    expect(mainManifest, isNot(contains('MANAGE_EXTERNAL_STORAGE')));
+    expect(mainManifest, isNot(contains('android.permission.INTERNET')));
+    expect(mainManifest, isNot(contains('READ_MEDIA_VIDEO')));
+    expect(debugManifest, contains('MANAGE_EXTERNAL_STORAGE'));
+    expect(profileManifest, contains('android.permission.INTERNET'));
+    expect(buildFile, contains('targetSdk = flutter.targetSdkVersion'));
+    expect(buildFile, contains('isDebuggable = false'));
+  });
+
+  test('privacy policy is present in source and in the app surface', () {
+    final policy = File('PRIVACY_POLICY.md');
+    final inApp = File(
+      'lib/features/settings/presentation/privacy_policy_screen.dart',
+    );
+
+    expect(policy.existsSync(), isTrue);
+    expect(policy.readAsStringSync(), contains('does not upload'));
+    expect(inApp.existsSync(), isTrue);
+    expect(inApp.readAsStringSync(), contains('PrivacyPolicyScreen'));
+  });
 
   test('Android 8–16 media access and MediaStore guards remain versioned', () {
     final access = File(

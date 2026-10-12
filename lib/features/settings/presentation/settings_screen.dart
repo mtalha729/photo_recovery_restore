@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/design_system/components/app_components.dart';
-
 import '../../../app/design_system/foundations/app_colors.dart';
 import '../../../app/design_system/foundations/app_tokens.dart';
 import '../../media_access/media_access.dart';
 import '../../recovery_shield_management/presentation/recovery_shield_screen.dart';
 import '../../recovery_shield_management/recovery_shield_manager.dart';
 import '../app_preferences.dart';
+import 'privacy_policy_screen.dart';
 
 abstract interface class StoreReviewIntent {
   Future<bool> requestReview();
@@ -306,8 +306,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.policy_outlined,
                   title: 'Privacy policy',
                   subtitle: 'Read how your data is handled',
-                  onTap: () => _showMessage(
-                    'The privacy policy will be available before public release.',
+                  onTap: () => Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const PrivacyPolicyScreen(),
+                    ),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.sm),

@@ -67,6 +67,13 @@ flutter build appbundle --release
 Google Play serves only the ABI and resources required by each device. A bundle
 is normally preferable to uploading a universal APK.
 
+Before publishing, host `PRIVACY_POLICY.md` at a stable public HTTPS URL, add it
+to the Play listing and keep the in-app privacy-policy screen current. Complete
+the Play Console Photo and Video Permissions declaration for the core recovery
+use case and the Data safety form from the final signed AAB. Never upload a
+`debug` or `profile` build: those variants intentionally contain development
+permissions and tooling that are absent from the production release.
+
 ### Inspect an artifact
 
 ```bash
@@ -84,8 +91,11 @@ debug functionality.
 
 The verified results list is populated only from MediaStore deletion evidence,
 Recovery Shield records, or another explicit protected-deletion record. The
-optional deep pass is a user-authorized, bounded traversal of accessible shared
-storage and removable volumes. It can retain extensionless or misnamed images,
+production build uses MediaStore and user-selected SAF folders; the broader
+filesystem traversal is isolated to the internal debug variant and is not a
+Play-upload permission. That traversal is user-authorized and bounded over
+accessible shared storage and removable volumes. It can retain extensionless or
+misnamed images,
 common trash/cache/thumbnail and shared-app-media locations, and bounded image
 payloads found inside approved containers.
 
