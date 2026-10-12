@@ -194,18 +194,31 @@ void main() {
   });
 
   test(
-    'launcher uses the supplied artwork across fallbacks and adaptive icon',
+    'launcher uses the selected artwork across fallbacks and adaptive icon',
     () {
+      final artwork = File('assets/photo_recovery_google_play_icon.png');
       final adaptiveIcon = File(
         'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',
       ).readAsStringSync();
 
+      expect(artwork.existsSync(), isTrue);
       expect(adaptiveIcon, contains('<adaptive-icon'));
       expect(adaptiveIcon, contains('@mipmap/ic_launcher_foreground'));
 
       expect(
         File('android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png')
             .existsSync(),
+        isTrue,
+      );
+      expect(
+        File('web/icons/Icon-512.png').existsSync(),
+        isTrue,
+      );
+      expect(
+        File(
+          'ios/Runner/Assets.xcassets/AppIcon.appiconset/'
+          'Icon-App-1024x1024@1x.png',
+        ).existsSync(),
         isTrue,
       );
     },
