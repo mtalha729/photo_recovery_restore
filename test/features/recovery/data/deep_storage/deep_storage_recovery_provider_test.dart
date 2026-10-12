@@ -4,6 +4,7 @@ import 'package:photo_recovery_restore/features/recovery/data/deep_storage/deep_
 import 'package:photo_recovery_restore/features/recovery/domain/media_source.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_classification.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_quality.dart';
+import 'package:photo_recovery_restore/features/recovery/domain/restore_capability.dart';
 
 void main() {
   test('maps API 24-29 legacy shared-read capability', () {
@@ -70,6 +71,33 @@ void main() {
         ),
         isTrue,
       );
+    },
+  );
+
+  test(
+    'signature-valid files without platform bounds remain recoverable copies',
+    () {
+      final item = _item(
+        name: 'camera.dng',
+        format: 'tiff',
+        mime: 'image/tiff',
+      )
+        ..['width'] = null
+        ..['height'] = null;
+      final result = PlatformDeepStorageRecoveryProvider.mapResponse({
+        'status': 'success',
+        'items': [item],
+      }) as DeepRecoveryProviderPage;
+
+      final candidate = result.items.single.candidate;
+      expect(candidate.width, isNull);
+      expect(candidate.height, isNull);
+      expect(
+        candidate.restoreCapability,
+        RestoreCapability.alternateFullQualityCopy,
+      );
+      expect(candidate.recoveryQuality, RecoveryQuality.completeCopy);
+      expect(candidate.classification.isDeletedRecoveryResult, isFalse);
     },
   );
 

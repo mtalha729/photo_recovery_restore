@@ -142,7 +142,6 @@ class DeepFileCopyRestorer(private val context: Context) {
     private fun safeName(value: String?, format: String?): String {
         val clean = value?.substringAfterLast('/')?.substringAfterLast('\\')
             ?.takeIf { it.isNotBlank() && it != "." && it != ".." }
-        if (clean != null) return clean
         val extension = when (format) {
             "png" -> "png"
             "webp" -> "webp"
@@ -151,8 +150,12 @@ class DeepFileCopyRestorer(private val context: Context) {
             "tiff" -> "tif"
             "heif", "heic" -> "heic"
             "avif" -> "avif"
+            "jxl" -> "jxl"
+            "jp2" -> "jp2"
             else -> "jpg"
         }
+        if (clean != null && clean.contains('.')) return clean
+        if (clean != null) return "$clean.$extension"
         return "recovered_${System.currentTimeMillis()}.$extension"
     }
 

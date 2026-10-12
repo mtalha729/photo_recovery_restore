@@ -14,8 +14,8 @@ class EmbeddedImageCarver(private val context: Context) {
         val offset: Long,
         val format: String,
         val mimeType: String,
-        val width: Int,
-        val height: Int,
+        val width: Int?,
+        val height: Int?,
     )
 
     data class Page(val items: List<Carved>, val nextOffset: Long?)
@@ -54,19 +54,21 @@ class EmbeddedImageCarver(private val context: Context) {
                 ).toInt()
                 val read = input.read(buffer, 0, requested)
                 if (read <= 0) break
-                for (index in 0 until read - 11) {
-                    val format = when {
-                        u(buffer[index]) == 0xff && u(buffer[index + 1]) == 0xd8 &&
-                            u(buffer[index + 2]) == 0xff -> "jpeg"
-                        PNG.indices.all { buffer[index + it] == PNG[it] } -> "png"
-                        ascii(buffer, index, 4) == "RIFF" &&
-                            ascii(buffer, index + 8, 4) == "WEBP" -> "webp"
-                        else -> null
-                    }
-                    if (format != null) {
-                        val absolute = base + index
-                        if (seenOffsets.add(absolute)) offsets += absolute to format
-                        if (offsets.size >= limit) break
+                if (read >= SIGNATURE_BYTES) {
+                    for (index in 0..(read - SIGNATURE_BYTES)) {
+                        val format = when {
+                            u(buffer[index]) == 0xff && u(buffer[index + 1]) == 0xd8 &&
+                                u(buffer[index + 2]) == 0xff -> "jpeg"
+                            PNG.indices.all { buffer[index + it] == PNG[it] } -> "png"
+                            ascii(buffer, index, 4) == "RIFF" &&
+                                ascii(buffer, index + 8, 4) == "WEBP" -> "webp"
+                            else -> null
+                        }
+                        if (format != null) {
+                            val absolute = base + index
+                            if (seenOffsets.add(absolute)) offsets += absolute to format
+                            if (offsets.size >= limit) break
+                        }
                     }
                 }
                 base += (read - OVERLAP_BYTES).coerceAtLeast(1)
@@ -75,7 +77,11 @@ class EmbeddedImageCarver(private val context: Context) {
                 nextOffset = if (offsets.size >= limit) {
                     offsets.last().first + 1
                 } else {
-                    base
+                    // The overlap bytes were already examined. Resume after
+                    // the largest possible signature start in that overlap so
+                    // a payload is not emitted twice across page boundaries.
+                    (base + OVERLAP_BYTES - SIGNATURE_BYTES + 1)
+                        .coerceAtMost(input.length())
                 }
             }
         }
@@ -107,7 +113,7 @@ class EmbeddedImageCarver(private val context: Context) {
                 val inspected = inspector.inspect(partial)
                 val width = inspected.width
                 val height = inspected.height
-                if (inspected.state != "valid" || width == null || height == null || !partial.renameTo(target)) {
+                if (inspected.state != "valid" || !partial.renameTo(target)) {
                     partial.delete()
                     target.delete()
                 } else {
@@ -201,6 +207,7 @@ class EmbeddedImageCarver(private val context: Context) {
     companion object {
         private const val CHUNK_BYTES = 64 * 1024
         private const val OVERLAP_BYTES = 16
+        private const val SIGNATURE_BYTES = 12
         private const val MAX_SCAN_BYTES_PER_PAGE = 8L * 1024 * 1024
         private const val MAX_PAYLOAD_BYTES = 32L * 1024 * 1024
         private const val PART_FILE_MAX_AGE_MILLIS = 60L * 60L * 1000L

@@ -47,9 +47,21 @@ class ImageSignatureInspector(private val resolver: ContentResolver) {
                 // BitmapFactory never creates a bitmap when inJustDecodeBounds is set.
                 stream.reset()
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeStream(stream, null, options)
+                try {
+                    BitmapFactory.decodeStream(stream, null, options)
+                } catch (_: SecurityException) {
+                    return ImageSignatureResult.unavailable()
+                } catch (_: Exception) {
+                    // Some platform decoders throw instead of returning unknown
+                    // bounds for a format they do not support.
+                    return signature
+                }
                 if (options.outWidth <= 0 || options.outHeight <= 0) {
-                    return ImageSignatureResult.unsupported(signature.format, signature.mimeType)
+                    // The byte signature is still useful when the platform lacks
+                    // a bounds decoder (for example HEIF, AVIF, RAW, JXL, or
+                    // JPEG 2000 on older API levels). Keep it as a possible-copy
+                    // candidate rather than silently dropping the original file.
+                    return signature
                 }
                 signature.copy(width = options.outWidth, height = options.outHeight)
             }
@@ -84,9 +96,29 @@ class ImageSignatureInspector(private val resolver: ContentResolver) {
                 u(bytes[2]) == 0x2A && u(bytes[3]) == 0x00
             val bigEndian = u(bytes[0]) == 0x4D && u(bytes[1]) == 0x4D &&
                 u(bytes[2]) == 0x00 && u(bytes[3]) == 0x2A
-            if (littleEndian || bigEndian) {
+            val littleBigTiff = u(bytes[0]) == 0x49 && u(bytes[1]) == 0x49 &&
+                u(bytes[2]) == 0x2B && u(bytes[3]) == 0x00
+            val bigBigTiff = u(bytes[0]) == 0x4D && u(bytes[1]) == 0x4D &&
+                u(bytes[2]) == 0x00 && u(bytes[3]) == 0x2B
+            if (littleEndian || bigEndian || littleBigTiff || bigBigTiff) {
                 return ImageSignatureResult.valid("tiff", "image/tiff")
             }
+        }
+        // JPEG XL and JPEG 2000 may not have a BitmapFactory decoder on older
+        // Android releases. Their container/codestream signatures are still
+        // strong enough to offer the original file as a possible copy.
+        if (count >= 12 && bytes.copyOfRange(0, 12).contentEquals(JXL_CONTAINER)) {
+            return ImageSignatureResult.valid("jxl", "image/jxl")
+        }
+        if (count >= 2 && u(bytes[0]) == 0xff && u(bytes[1]) == 0x0a) {
+            return ImageSignatureResult.valid("jxl", "image/jxl")
+        }
+        if (count >= 12 && bytes.copyOfRange(0, 12).contentEquals(JP2_CONTAINER)) {
+            return ImageSignatureResult.valid("jp2", "image/jp2")
+        }
+        if (count >= 4 && u(bytes[0]) == 0xff && u(bytes[1]) == 0x4f &&
+            u(bytes[2]) == 0xff && u(bytes[3]) == 0x51) {
+            return ImageSignatureResult.valid("jp2", "image/jp2")
         }
         if (count >= 12 && ascii(bytes, 4, 4) == "ftyp") {
             val brand = ascii(bytes, 8, 4).lowercase()
@@ -107,6 +139,14 @@ class ImageSignatureInspector(private val resolver: ContentResolver) {
         private const val MAX_HEADER_BYTES = 64
         private val PNG = byteArrayOf(
             0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        )
+        private val JXL_CONTAINER = byteArrayOf(
+            0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A,
+            0x87.toByte(), 0x0A,
+        )
+        private val JP2_CONTAINER = byteArrayOf(
+            0x00, 0x00, 0x00, 0x0C, 0x6A, 0x50, 0x20, 0x20, 0x0D, 0x0A,
+            0x87.toByte(), 0x0A,
         )
         private val HEIF_BRANDS = setOf(
             "heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1", "avif", "avis",

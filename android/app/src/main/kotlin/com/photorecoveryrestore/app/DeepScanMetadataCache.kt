@@ -21,7 +21,9 @@ class DeepScanMetadataCache(context: Context) {
                 removeExpired(key)
                 return null
             }
-            return entry.signature.takeIf { entry.size == size && entry.modified == modified }
+            return entry.signature.takeIf {
+                it.state == "valid" && entry.size == size && entry.modified == modified
+            }
         }
         val raw = preferences.getString(key, null) ?: return null
         val entry = decode(raw) ?: return null
@@ -30,7 +32,9 @@ class DeepScanMetadataCache(context: Context) {
             return null
         }
         memory[key] = entry
-        return entry.signature.takeIf { entry.size == size && entry.modified == modified }
+        return entry.signature.takeIf {
+            it.state == "valid" && entry.size == size && entry.modified == modified
+        }
     }
 
     @Synchronized
@@ -41,6 +45,7 @@ class DeepScanMetadataCache(context: Context) {
         modified: Long,
         signature: ImageSignatureResult,
     ) {
+        if (signature.state != "valid") return
         val key = key(volume, relativePath)
         val entry = CacheEntry(size, modified, System.currentTimeMillis(), signature)
         memory[key] = entry
@@ -96,7 +101,9 @@ class DeepScanMetadataCache(context: Context) {
     }.toString()
 
     private fun key(volume: String, relativePath: String) =
-        "v:" + volume.lowercase() + ":" + relativePath.lowercase().replace('\\', '/')
+        // Volume identifiers are case-insensitive; the path is not normalized
+        // to lower case so case-distinct files cannot share a cached signature.
+        "v:" + volume.lowercase() + ":" + relativePath.replace('\\', '/')
 
     private data class CacheEntry(
         val size: Long,

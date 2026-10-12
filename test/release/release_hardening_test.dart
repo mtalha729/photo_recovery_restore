@@ -89,6 +89,7 @@ void main() {
     // Android 10 guards volume and relative-path features; verified trash and
     // broad-storage APIs are only reached on Android 11+.
     expect(inventory, contains('Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q'));
+    expect(inventory, contains('MediaStore.MATCH_VISIBLE'));
     expect(metadata, contains('Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q'));
     expect(trash, contains('Build.VERSION.SDK_INT < Build.VERSION_CODES.R'));
     expect(deepStorage, contains('Build.VERSION.SDK_INT >= Build.VERSION_CODES.R'));
@@ -99,6 +100,54 @@ void main() {
     expect(restore, contains('Build.VERSION.SDK_INT < Build.VERSION_CODES.Q'));
     expect(restore, contains('Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q'));
   });
+  test(
+    'deep recovery broadens safe coverage without inventing deletion evidence',
+    () {
+      final deepStorage = File(
+        'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+        'DeepStorageRecoveryQuery.kt',
+      ).readAsStringSync();
+      final signatures = File(
+        'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+        'ImageSignatureInspector.kt',
+      ).readAsStringSync();
+      final carver = File(
+        'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+        'EmbeddedImageCarver.kt',
+      ).readAsStringSync();
+      final cache = File(
+        'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+        'DeepScanMetadataCache.kt',
+      ).readAsStringSync();
+      final restorer = File(
+        'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+        'DeepFileCopyRestorer.kt',
+      ).readAsStringSync();
+
+      expect(deepStorage, contains('shallow = !thorough'));
+      expect(deepStorage, contains('currentMediaKey'));
+      expect(deepStorage, contains('displayName.lowercase()'));
+      expect(deepStorage, contains('canonicalFile'));
+      expect(deepStorage, contains('isWithin'));
+      expect(deepStorage, contains('MAX_CARVED_RESULTS_PER_WORK'));
+      expect(
+        deepStorage,
+        contains('if (extension in UNRELATED_EXTENSIONS) return thorough || highValue'),
+      );
+      expect(signatures, contains('JXL_CONTAINER'));
+      expect(signatures, contains('JP2_CONTAINER'));
+      expect(signatures, contains('return signature'));
+      expect(carver, contains('val width: Int?'));
+      expect(carver, contains('MAX_PAYLOAD_BYTES'));
+      expect(cache, contains('signature.state != "valid"'));
+      expect(cache, contains('relativePath.replace'));
+      expect(cache, isNot(contains('relativePath.lowercase')));
+      expect(restorer, contains('"jxl" -> "jxl"'));
+      expect(restorer, contains('"jp2" -> "jp2"'));
+      expect(deepStorage, isNot(contains('/dev/')));
+    },
+  );
+
   test('thumbnail loading remains bounded and avoids full-image decoding', () {
     final loader = File(
       'android/app/src/main/kotlin/com/photorecoveryrestore/app/'

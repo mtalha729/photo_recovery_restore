@@ -119,6 +119,9 @@ class MultiVolumeCurrentMediaQuery(private val context: Context) {
                     ContentResolver.QUERY_SORT_DIRECTION_ASCENDING,
                 )
                 putInt(ContentResolver.QUERY_ARG_LIMIT, pageSize + 1)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_VISIBLE)
+                }
                 putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
                 putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
             }

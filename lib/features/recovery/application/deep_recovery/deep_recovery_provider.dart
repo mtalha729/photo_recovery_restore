@@ -29,8 +29,8 @@ enum DeepProviderAvailability { available, accessRequired, unsupported, failed }
 /// Controls how much of the same image-recovery pipeline is enabled.
 ///
 /// Profiles do not change the truth rules used for classification. They only
-/// control whether the optional, bounded container pass is requested after
-/// the normal shared-storage traversal.
+/// control traversal depth and whether the optional, bounded container pass is
+/// requested for approved storage locations.
 enum PhotoRecoveryProfile { fastDeep, thorough }
 
 class DeepRecoveryDiscoveryRecord {
@@ -114,6 +114,7 @@ class DeepRecoveryProviderPage extends DeepRecoveryProviderResult {
   final int currentFilesSkipped;
   final int signatureCacheHits;
   final int signatureCacheMisses;
+  /// All three values are deltas for this page; the engine accumulates them.
   final int nativeTraversalMillis;
   final int carvedTemporaryBytes;
   final int carvedTempBytesReclaimed;

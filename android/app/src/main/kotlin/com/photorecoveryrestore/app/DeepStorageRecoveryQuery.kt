@@ -17,8 +17,8 @@ class DeepStorageRecoveryQuery(private val context: Context) {
     private val inspector = ImageSignatureInspector(context.contentResolver)
     private val embeddedImageCarver = EmbeddedImageCarver(context)
     private val metadataCache = DeepScanMetadataCache(context)
-    // The carver remains available for a future explicit thorough pass. The
-    // standard deep pass deliberately never traverses database/cache payloads.
+    // The carver is restricted to the explicit thorough profile and approved
+    // cache, trash, thumbnail, and shared-app-media locations.
     private val sessions = ConcurrentHashMap<String, Session>()
 
     fun capability(): Map<String, Any?> {
@@ -121,28 +121,33 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                     return failure("cancelled", "Deep scan cancelled safely.")
                 }
                 val child = children[index]
+                // Resolve every child before opening it. This keeps symlinks and
+                // provider-created aliases inside the same permitted volume and
+                // prevents a shared-storage link from reaching a restricted tree.
+                val safeChild = runCatching { child.canonicalFile }.getOrNull()
                 // Every entry consumes the page budget, including directories,
                 // current media and extension-filtered files.
                 examinedThisPage++
                 session.entriesExamined++
-                if (child.isDirectory) {
-                    if (!work.shallowRoot || shouldEnterFromRoot(child)) {
-                        enqueueDirectory(session, child, work.root)
+                if (safeChild == null || !isAllowed(safeChild, work.root)) continue
+                if (safeChild.isDirectory) {
+                    if (!work.shallowRoot || shouldEnterFromRoot(safeChild)) {
+                        enqueueDirectory(session, safeChild, work.root)
                     }
                 } else {
                     session.filesExamined++
                     val root = work.root
-                    val relative = root.file.toPath().relativize(child.toPath())
+                    val relative = root.file.toPath().relativize(safeChild.toPath())
                         .toString().replace('\\', '/')
                     if (session.currentMediaLocations.contains(
-                            currentMediaKey(root.name, relative, child.length()),
+                            currentMediaKey(root.name, relative, safeChild.length()),
                         )) {
                         session.currentFilesSkipped++
-                    } else if (session.thorough && child.extension.lowercase() in CONTAINER_EXTENSIONS &&
+                    } else if (session.thorough && safeChild.extension.lowercase() in CONTAINER_EXTENSIONS &&
                         isCarvingLocation(relative)
                     ) {
                         val carved = embeddedImageCarver.carvePage(
-                            child,
+                            safeChild,
                             work.embeddedOffset,
                             minOf(MAX_CARVED_RESULTS_PER_WORK, pageSize - items.size),
                         ) { session.cancelled || Thread.currentThread().isInterrupted }
@@ -150,23 +155,23 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                             items += mapOf(
                                 "filePath" to payload.file.absolutePath,
                                 "canonicalPath" to null,
-                                "containerPath" to child.absolutePath,
+                                "containerPath" to safeChild.absolutePath,
                                 "embeddedOffset" to payload.offset,
-                                "displayName" to "${child.name}_${payload.offset}.${payload.format}",
+                                "displayName" to "${safeChild.name}_${payload.offset}.${payload.format}",
                                 "mimeType" to payload.mimeType,
                                 "detectedFormat" to payload.format,
                                 "byteSize" to payload.file.length(),
                                 "width" to payload.width,
                                 "height" to payload.height,
-                                "modifiedMillis" to child.lastModified().takeIf { it > 0 },
+                                "modifiedMillis" to safeChild.lastModified().takeIf { it > 0 },
                                 "relativePath" to relative.substringBeforeLast('/', ""),
                                 "storageVolumeName" to root.name,
                                 "isRemovableStorage" to root.removable,
                                 "source" to if (root.removable) "sdCard" else sourceFor(relative),
                                 "isTrashLike" to evidenceFor(relative).trash,
-                                "isThumbnailLike" to false,
+                                "isThumbnailLike" to evidenceFor(relative).thumbnail,
                                 "isCacheLike" to true,
-                                "isHidden" to child.name.startsWith('.'),
+                                "isHidden" to safeChild.name.startsWith('.'),
                                 "isExtensionMismatch" to true,
                                 "isEmbeddedPayload" to true,
                             )
@@ -179,14 +184,14 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                             )
                             break@scanPage
                         }
-                    } else if (!shouldInspect(child, relative)) {
+                    } else if (!shouldInspect(safeChild, relative, session.thorough)) {
                         session.filesSkippedByExtension++
-                        if (child.extension.lowercase() in CONTAINER_EXTENSIONS) {
+                        if (safeChild.extension.lowercase() in CONTAINER_EXTENSIONS) {
                             session.containerFilesDeferred++
                         }
                     } else {
-                        val byteSize = child.length()
-                        val modifiedMillis = child.lastModified()
+                        val byteSize = safeChild.length()
+                        val modifiedMillis = safeChild.lastModified()
                         val relativeIdentity = relative
                         val signature = metadataCache.get(
                             volume = root.name,
@@ -194,14 +199,21 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                             size = byteSize,
                             modified = modifiedMillis,
                         )?.also { session.signatureCacheHits++ }
-                            ?: inspector.inspect(child).also {
-                                metadataCache.put(
-                                    volume = root.name,
-                                    relativePath = relativeIdentity,
-                                    size = byteSize,
-                                    modified = modifiedMillis,
-                                    signature = it,
-                                )
+                            ?: inspector.inspect(safeChild).also {
+                                // Do not cache a transient denial, decoder failure,
+                                // or invalid header. A file may become readable or
+                                // be replaced with an image at the same location;
+                                // caching only verified signatures avoids hiding it
+                                // on a later deep scan.
+                                if (it.state == "valid") {
+                                    metadataCache.put(
+                                        volume = root.name,
+                                        relativePath = relativeIdentity,
+                                        size = byteSize,
+                                        modified = modifiedMillis,
+                                        signature = it,
+                                    )
+                                }
                                 session.signatureCacheMisses++
                             }
                         session.standaloneFilesInspected++
@@ -214,9 +226,9 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                         } else {
                             val evidence = evidenceFor(relative)
                             items += mapOf(
-                                "filePath" to child.absolutePath,
+                                "filePath" to safeChild.absolutePath,
                                 "canonicalPath" to null,
-                                "displayName" to child.name,
+                                "displayName" to safeChild.name,
                                 "mimeType" to signature.mimeType,
                                 "detectedFormat" to signature.format,
                                 "byteSize" to byteSize,
@@ -230,8 +242,8 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                                 "isTrashLike" to evidence.trash,
                                 "isThumbnailLike" to evidence.thumbnail,
                                 "isCacheLike" to evidence.cache,
-                                "isHidden" to child.name.startsWith('.'),
-                                "isExtensionMismatch" to extensionMismatch(child, signature.format),
+                                "isHidden" to safeChild.name.startsWith('.'),
+                                "isExtensionMismatch" to extensionMismatch(safeChild, signature.format),
                             )
                             session.candidatesFound++
                         }
@@ -264,6 +276,22 @@ class DeepStorageRecoveryQuery(private val context: Context) {
                 session.lastIssuedToken = nextToken
             }
         }
+        val traversalMillis =
+            (SystemClock.elapsedRealtime() - session.startedAtMillis).coerceAtLeast(0L)
+        val traversalMillisThisPage =
+            (traversalMillis - session.reportedTraversalMillis).coerceAtLeast(0L)
+        session.reportedTraversalMillis = traversalMillis
+        val carvedTemporaryBytesThisPage =
+            (session.carvedTemporaryBytes - session.reportedCarvedTemporaryBytes)
+                .coerceAtLeast(0L)
+        session.reportedCarvedTemporaryBytes = session.carvedTemporaryBytes
+        val carvedTempBytesReclaimedThisPage =
+            if (session.reclaimedCarvedBytesReported) {
+                0L
+            } else {
+                session.reclaimedCarvedBytesReported = true
+                session.reclaimedCarvedBytes
+            }
         if (complete) {
             sessions.remove(session.id)
             metadataCache.flush()
@@ -283,8 +311,8 @@ class DeepStorageRecoveryQuery(private val context: Context) {
             "volumesScanned" to session.roots.map { it.name },
             "currentArea" to session.currentArea,
             "embeddedPayloads" to session.embeddedPayloads,
-            "carvedTemporaryBytes" to session.carvedTemporaryBytes,
-            "carvedTempBytesReclaimed" to session.reclaimedCarvedBytes,
+            "carvedTemporaryBytes" to carvedTemporaryBytesThisPage,
+            "carvedTempBytesReclaimed" to carvedTempBytesReclaimedThisPage,
             "remainingDirectoryQueue" to session.pending.size,
             "visitedDirectoryCount" to session.visited.size,
             "duplicateDirectorySkips" to
@@ -299,7 +327,7 @@ class DeepStorageRecoveryQuery(private val context: Context) {
             "containerFilesDeferred" to session.containerFilesDeferred,
             "signatureCacheHits" to session.signatureCacheHits - cacheHitsAtPageStart,
             "signatureCacheMisses" to session.signatureCacheMisses - cacheMissesAtPageStart,
-            "nativeTraversalMs" to (SystemClock.elapsedRealtime() - session.startedAtMillis),
+            "nativeTraversalMs" to traversalMillisThisPage,
         )
     }
 
@@ -323,12 +351,16 @@ class DeepStorageRecoveryQuery(private val context: Context) {
     ): Session {
         val roots = discoverRoots()
         val reclaimedCarvedBytes = embeddedImageCarver.cleanupAbandonedParts()
+        val thorough = profile == "thorough"
         val priorityNames = listOf(
-            ".Trash", ".trash", ".recycle", "RecycleBin", "LOST.DIR",
-            "DCIM/.thumbnails", "DCIM/.trash", "Pictures/.trash",
-            "Pictures/Screenshots", "Download", "Android/media",
-            "Android/media/com.whatsapp/WhatsApp/Media",
+            ".Trash", ".trash", ".recycle", ".recyclebin", "RecycleBin", "LOST.DIR",
+            ".thumbnails", "DCIM/.thumbnails", "DCIM/.trash", "DCIM/.Trash",
+            "Pictures/.thumbnails", "Pictures/.trash", "Pictures/.Trash",
+            "Pictures/Screenshots", "Screenshots", "Download", "Downloads",
+            "Android/media", "Android/media/com.whatsapp/WhatsApp/Media",
             "Android/media/org.telegram.messenger/Telegram", "DCIM", "Pictures",
+            "Movies", "Documents", "WhatsApp", "Telegram", "Signal", "Viber",
+            "Messenger", "Snapchat", "Instagram",
         )
         val pending = ArrayDeque<DirectoryWork>()
         val scheduled = mutableSetOf<String>()
@@ -337,11 +369,12 @@ class DeepStorageRecoveryQuery(private val context: Context) {
             if (!isAllowed(canonical, root)) return
             if (scheduled.add(canonical.path)) pending.addLast(DirectoryWork(canonical, root, shallowRoot = shallow))
         }
-        // A root is read only one level deep. It discovers direct images and
-        // approved media/recovery folders without turning fastDeep into a full
-        // shared-storage crawl.
+        // fastDeep limits the root to direct files plus known media/recovery
+        // areas. Thorough mode intentionally traverses every permitted directory
+        // on the volume, still page-bounded and cancellable, so images hidden in
+        // OEM/app-specific folders are not silently missed.
         roots.forEach { root ->
-            schedule(root, root.file, shallow = true)
+            schedule(root, root.file, shallow = !thorough)
             priorityNames.forEach { name -> schedule(root, File(root.file, name), shallow = false) }
         }
         val session = Session(
@@ -351,7 +384,7 @@ class DeepStorageRecoveryQuery(private val context: Context) {
             // Existing-media exclusion remains authoritative in Dart. Avoid a
             // second full MediaStore walk here.
             currentMediaLocations = currentMediaLocations,
-            thorough = profile == "thorough",
+            thorough = thorough,
         )
         sessions[session.id] = session
         return session
@@ -372,40 +405,85 @@ class DeepStorageRecoveryQuery(private val context: Context) {
         return name in ROOT_MEDIA_DIRECTORIES || name.startsWith(".") ||
             name.contains("trash") || name.contains("recycl") || name.contains("cache") ||
             name.contains("preview") || name.contains("media") || name.contains("whatsapp") ||
-            name.contains("telegram") || name.contains("messenger")
+            name.contains("telegram") || name.contains("messenger") ||
+            name.contains("signal") || name.contains("viber") || name.contains("snapchat") ||
+            name.contains("instagram") || name.contains("facebook") ||
+            name.contains("screenshot") || name.contains("camera") ||
+            name.contains("document") || name.contains("download") ||
+            name.contains("lost.dir")
     }
 
-    private fun shouldInspect(file: File, relative: String?): Boolean {
+    private fun shouldInspect(
+        file: File,
+        relative: String?,
+        thorough: Boolean,
+    ): Boolean {
         val extension = file.extension.lowercase()
         if (extension in IMAGE_EXTENSIONS) return true
-        if (extension in UNRELATED_EXTENSIONS) return false
         val evidence = evidenceFor(relative ?: file.name)
+        val normalized = relative?.replace('\\', '/')?.trim('/')?.lowercase()
         val highValue = evidence.trash || evidence.thumbnail || evidence.cache ||
-            (relative?.lowercase()?.let { it.startsWith("dcim/") || it.startsWith("pictures/") ||
-                it.startsWith("download/") || it.startsWith("android/media/") } == true)
-        return extension.isEmpty() || highValue
+            (normalized?.let { value ->
+                value.startsWith("dcim/") || value.startsWith("pictures/") ||
+                    value.startsWith("download/") || value.startsWith("downloads/") ||
+                    value.startsWith("screenshots/") || value.startsWith("documents/") ||
+                    value.startsWith("android/media/") ||
+                    value.split('/').any { segment ->
+                        segment == "media" || segment.contains("media") ||
+                            segment.contains("camera") || segment.contains("screenshot") ||
+                            segment.contains("download") || segment.contains("document") ||
+                            segment.contains("whatsapp") || segment.contains("telegram") ||
+                            segment.contains("signal") || segment.contains("viber") ||
+                            segment.contains("messenger") || segment.contains("snapchat") ||
+                            segment.contains("instagram") || segment.contains("facebook")
+                    }
+            } == true)
+        if (extension in UNRELATED_EXTENSIONS) return thorough || highValue
+        // Thorough mode is explicitly exhaustive over the permitted tree: a
+        // header-only read is safe even when the filename says nothing useful.
+        return thorough || extension.isEmpty() || highValue
     }
 
     private fun isCarvingLocation(relative: String?): Boolean {
-        val value = relative?.lowercase() ?: return false
-        return value.contains("/cache/") || value.contains("/preview/") ||
-            value.contains("/previews/") || value.startsWith("android/media/") ||
-            value.contains("/.trash/") || value.contains("/.trashed-")
+        val value = relative?.replace('\\', '/')?.trim('/')?.lowercase() ?: return false
+        return value.startsWith("android/media/") ||
+            listOf(
+                "cache",
+                "preview",
+                "previews",
+                "trash",
+                "recycle",
+                "recyclebin",
+                ".trash",
+                ".thumbnails",
+                "thumbnails",
+                "thumb",
+            ).any { hasPathSegment(value, it) } ||
+            value.split('/').any {
+                it.startsWith(".trash") || it.startsWith(".recycle") ||
+                    it.startsWith(".trashed-")
+            }
     }
+
+    private fun hasPathSegment(path: String, segment: String): Boolean =
+        path == segment || path.startsWith("$segment/") || path.contains("/$segment/")
 
     private fun currentMediaKey(
         volume: String,
         relativeFile: String?,
         size: Long,
     ): String? {
-        val normalized = relativeFile?.replace('\\', '/')?.trim('/')?.lowercase()
+        // Match ExistingMediaKeys.storageLocation exactly: volume and file
+        // name are case-insensitive, but the directory path keeps its original
+        // case so two case-distinct files cannot be merged accidentally.
+        val normalized = relativeFile?.replace('\\', '/')?.trim('/')
             ?.takeIf { it.isNotBlank() }
             ?: return null
         val separator = normalized.lastIndexOf('/')
         if (separator <= 0 || separator == normalized.lastIndex) return null
         val relativePath = normalized.substring(0, separator)
         val displayName = normalized.substring(separator + 1)
-        return "${volume.lowercase()}|$relativePath|$displayName|$size"
+        return "${volume.lowercase()}|$relativePath|${displayName.lowercase()}|$size"
     }
     private fun traversalStateId(session: Session): String {
         val head = session.pending.peekFirst()
@@ -448,7 +526,14 @@ class DeepStorageRecoveryQuery(private val context: Context) {
         fun add(file: File?, removable: Boolean) {
             val canonical = file?.let { runCatching { it.canonicalFile }.getOrNull() } ?: return
             if (!canonical.exists() || values.any { it.file.path == canonical.path }) return
-            values += VolumeRoot(if (removable) canonical.name else "external_primary", canonical, removable)
+            val volumeName = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                "external"
+            } else if (removable) {
+                canonical.name
+            } else {
+                "external_primary"
+            }
+            values += VolumeRoot(volumeName, canonical, removable)
         }
         add(Environment.getExternalStorageDirectory(), false)
         context.getExternalFilesDirs(null).filterNotNull().forEach { appDir ->
@@ -477,29 +562,42 @@ class DeepStorageRecoveryQuery(private val context: Context) {
     private fun sourceFor(path: String?): String {
         val value = path?.lowercase() ?: return "unknown"
         return when {
-            value.contains("whatsapp") || value.contains("telegram") || value.contains("messenger") || value.contains("signal") || value.contains("viber") -> "messagingSharedMedia"
-            value.startsWith("pictures/screenshots") || value.contains("/screenshots/") -> "screenshots"
-            value.startsWith("download/") -> "downloadsSavedMedia"
-            value.startsWith("dcim/") || value.startsWith("pictures/") -> "cameraGallery"
+            value.contains("whatsapp") || value.contains("telegram") || value.contains("messenger") ||
+                value.contains("signal") || value.contains("viber") || value.contains("snapchat") ||
+                value.contains("instagram") || value.contains("facebook") -> "messagingSharedMedia"
+            value.startsWith("pictures/screenshots") || value.startsWith("screenshots/") || value.contains("/screenshots/") -> "screenshots"
+            value.startsWith("download/") || value.startsWith("downloads/") ||
+                value.contains("/download/") || value.contains("/downloads/") -> "downloadsSavedMedia"
+            value.startsWith("dcim/") || value.startsWith("pictures/") ||
+                value.contains("/dcim/") || value.contains("/pictures/") -> "cameraGallery"
             else -> "unknown"
         }
     }
 
     private fun evidenceFor(path: String): Evidence {
-        val value = path.lowercase()
+        val segments = path.replace('\\', '/').trim('/').lowercase().split('/')
         return Evidence(
-            trash = value.contains("/.trash/") || value.startsWith(".trash/") ||
-                value.contains("/.trashed-") || value.startsWith(".trashed-") ||
-                value.contains("/.recycle/") || value.contains("/recyclebin/"),
-            thumbnail = value.contains("/.thumbnails/") || value.contains("/thumbnail") || value.contains("/thumb/"),
-            cache = value.contains("/cache/") || value.contains("/preview/") || value.contains("/previews/"),
+            trash = segments.any {
+                it == "trash" || it.startsWith("trash-") || it.startsWith("trash_") ||
+                    it == "trashbin" || it.startsWith(".trash") || it == "recycle" ||
+                    it == "recyclebin" || it.startsWith(".recycle") ||
+                    it.startsWith(".trashed-")
+            },
+            thumbnail = segments.any {
+                it == ".thumbnails" || it == "thumb" || it.contains("thumbnail")
+            },
+            cache = segments.any {
+                it == "cache" || it == ".cache" || it == "preview" ||
+                    it == "previews" || it == ".preview"
+            },
         )
     }
 
     private fun categoryFor(file: File): String {
         val value = file.path.replace('\\', '/').lowercase()
         return when {
-            value.contains("/.trash") || value.contains("/.trashed-") -> "Trash locations"
+            value.contains("/.trash") || value.contains("/.trashed-") ||
+                value.contains("/trash/") || value.contains("/recycle") -> "Trash locations"
             value.contains("thumbnail") || value.contains("/thumb/") -> "Thumbnail locations"
             value.contains("/download") -> "Downloads"
             value.contains("/android/media") -> "Shared app media"
@@ -548,6 +646,9 @@ class DeepStorageRecoveryQuery(private val context: Context) {
         val reclaimedCarvedBytes: Long = 0,
         val currentMediaLocations: Set<String> = emptySet(),
         val thorough: Boolean = false,
+        var reportedTraversalMillis: Long = 0,
+        var reportedCarvedTemporaryBytes: Long = 0,
+        var reclaimedCarvedBytesReported: Boolean = false,
         val issuedStateIds: MutableSet<String> = mutableSetOf(),
         @Volatile var cancelled: Boolean = false,
         var filesExamined: Int = 0,
@@ -575,7 +676,12 @@ class DeepStorageRecoveryQuery(private val context: Context) {
     companion object {
         private const val MAX_FILES_PER_PAGE = 2000
         private const val MAX_CARVED_RESULTS_PER_WORK = 4
-        private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif")
+        private val IMAGE_EXTENSIONS = setOf(
+            "jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff",
+            "heic", "heif", "avif", "jxl", "jp2", "j2k", "j2c", "jpc",
+            "jpf", "jpx", "jpm", "jpeg2000", "dng", "cr2", "nef", "arw",
+            "orf", "rw2", "raf", "raw",
+        )
         private val UNRELATED_EXTENSIONS = setOf("mp4", "mkv", "avi", "mov", "mp3", "wav", "aac", "apk", "pdf", "zip", "rar", "7z", "doc", "docx", "xls", "xlsx")
         private val CONTAINER_EXTENSIONS = setOf("db", "sqlite", "cache", "bin", "dat", "tmp")
         private val ROOT_MEDIA_DIRECTORIES = setOf("dcim", "pictures", "download", "downloads", "android", "movies")

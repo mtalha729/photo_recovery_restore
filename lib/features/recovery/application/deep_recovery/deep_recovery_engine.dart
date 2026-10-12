@@ -163,9 +163,9 @@ class DeepRecoveryEngine {
         currentFilesSkipped += page.currentFilesSkipped;
         signatureCacheHits += page.signatureCacheHits;
         signatureCacheMisses += page.signatureCacheMisses;
-        nativeTraversalMillis = page.nativeTraversalMillis;
-        carvedTemporaryBytes = page.carvedTemporaryBytes;
-        carvedTempBytesReclaimed = page.carvedTempBytesReclaimed;
+        nativeTraversalMillis += page.nativeTraversalMillis;
+        carvedTemporaryBytes += page.carvedTemporaryBytes;
+        carvedTempBytesReclaimed += page.carvedTempBytesReclaimed;
         volumesScanned.addAll(page.volumesScanned);
         duplicateDirectorySkips += page.duplicateDirectorySkips;
         repeatedCursorDetections += page.repeatedCursorDetections;

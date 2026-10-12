@@ -337,6 +337,8 @@ void main() {
           entriesExamined: 200,
           currentFilesSkipped: 199,
           signatureCacheHits: 1,
+          carvedTemporaryBytes: 1024,
+          carvedTempBytesReclaimed: 64,
           nativeTraversalMillis: 12,
         ),
         const DeepRecoveryProviderPage(
@@ -345,6 +347,8 @@ void main() {
           completionReason: 'exhausted',
           entriesExamined: 3,
           signatureCacheMisses: 2,
+          carvedTemporaryBytes: 2048,
+          carvedTempBytesReclaimed: 128,
           nativeTraversalMillis: 18,
         ),
       ]);
@@ -365,7 +369,9 @@ void main() {
       expect(result.currentFilesSkipped, 199);
       expect(result.signatureCacheHits, 1);
       expect(result.signatureCacheMisses, 2);
-      expect(result.nativeTraversalMillis, 18);
+      expect(result.nativeTraversalMillis, 30);
+      expect(result.carvedTemporaryBytes, 3072);
+      expect(result.carvedTempBytesReclaimed, 192);
     },
   );
 }
