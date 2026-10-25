@@ -7,6 +7,7 @@ import 'package:photo_recovery_restore/features/recovery/domain/deletion_evidenc
 import 'package:photo_recovery_restore/features/recovery/domain/media_candidate.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/media_source.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_classification.dart';
+import 'package:photo_recovery_restore/features/recovery/domain/recovery_discovery_evidence.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_quality.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/restore_capability.dart';
 
@@ -18,6 +19,7 @@ void main() {
     MediaSource source = MediaSource.cameraGallery,
     RecoveryClassification classification = RecoveryClassification.unclassified,
     Iterable<DeletionEvidenceReason> evidence = const [],
+    bool isRecoveryShieldBackup = false,
     RestoreCapability capability = RestoreCapability.notRestorable,
     RecoveryQuality quality = RecoveryQuality.metadataOnly,
     int? width,
@@ -31,6 +33,9 @@ void main() {
     recoveryQuality: quality,
     width: width,
     height: height,
+    discoveryEvidence: RecoveryDiscoveryEvidence(
+      isRecoveryShieldBackup: isRecoveryShieldBackup,
+    ),
   );
 
   test('existing identity always blocks deleted presentation', () {
@@ -49,7 +54,7 @@ void main() {
     );
   });
 
-  test('only explicit trash and protected evidence produce deleted states', () {
+  test('system trash is deleted evidence; Shield records stay protected copies', () {
     expect(
       classifier.classify(
         candidate: candidate(
@@ -62,11 +67,12 @@ void main() {
     expect(
       classifier.classify(
         candidate: candidate(
-          evidence: const [DeletionEvidenceReason.recoveryShieldRecord],
+          isRecoveryShieldBackup: true,
+          evidence: const [DeletionEvidenceReason.systemTrashRecord],
         ),
         existingMediaDecision: noMatch,
       ),
-      DeepRecoveryDisposition.protectedDeleted,
+      DeepRecoveryDisposition.protectedCopy,
     );
     expect(
       classifier.classify(
@@ -117,6 +123,20 @@ void main() {
         provenCopyType: PossibleCopyType.thumbnailSized,
       ),
       DeepRecoveryDisposition.thumbnailCopy,
+    );
+  });
+
+  test('unknown-quality copies remain recoverable without a quality claim', () {
+    expect(
+      classifier.classify(
+        candidate: candidate(
+          classification: RecoveryClassification.possibleCopy,
+          capability: RestoreCapability.unknownQualityCopy,
+          quality: RecoveryQuality.unknownQualityCopy,
+        ),
+        existingMediaDecision: noMatch,
+      ),
+      DeepRecoveryDisposition.possibleUnknownQualityCopy,
     );
   });
 

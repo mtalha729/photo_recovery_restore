@@ -3,6 +3,7 @@ enum RestoreCapability {
   protectedOriginal,
   alternateFullQualityCopy,
   lowerResolutionCopy,
+  unknownQualityCopy,
   metadataOnly,
   notRestorable,
 }

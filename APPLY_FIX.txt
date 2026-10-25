@@ -1,0 +1,7 @@
+Kotlin compile fix for VerifiedTrashQuery.kt.
+
+Extract this ZIP into the Android project root (the folder containing settings.gradle.kts),
+preserve the android/app/... path, and replace the existing file. The width/height Elvis
+expressions are parenthesized so each mapOf argument remains a Pair.
+
+No APK/AAB was built.

@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_recovery_restore/features/recovery/application/deep_recovery/deep_recovery_provider.dart';
 import 'package:photo_recovery_restore/features/recovery/data/deep_storage/deep_storage_recovery_provider.dart';
@@ -6,6 +7,52 @@ import 'package:photo_recovery_restore/features/recovery/domain/recovery_classif
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_quality.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'sends the current-media comparison index only when starting a native scan',
+    () async {
+      const channel = MethodChannel('test/deep_storage_recovery');
+      final requests = <Map<Object?, Object?>>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            requests.add(call.arguments as Map<Object?, Object?>);
+            return <String, Object?>{
+              'status': 'success',
+              'items': <Object?>[],
+              'nextContinuationToken': requests.length == 1 ? 'page-2' : null,
+              'providerExhausted': requests.length != 1,
+            };
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      const provider = PlatformDeepStorageRecoveryProvider.withChannel(channel);
+      const keys = {'volume:DCIM/photo.jpg:123'};
+
+      await provider.getPage(
+        const DeepRecoveryProviderRequest(
+          pageSize: 200,
+          source: MediaSource.unknown,
+          existingStorageLocationKeys: keys,
+        ),
+      );
+      await provider.getPage(
+        const DeepRecoveryProviderRequest(
+          pageSize: 200,
+          source: MediaSource.unknown,
+          continuationToken: 'page-2',
+          existingStorageLocationKeys: keys,
+        ),
+      );
+
+      expect(requests, hasLength(2));
+      expect(requests.first['existingStorageLocationKeys'], containsAll(keys));
+      expect(requests.last.containsKey('existingStorageLocationKeys'), isFalse);
+    },
+  );
+
   test('maps API 24-29 legacy shared-read capability', () {
     final state = PlatformDeepStorageRecoveryProvider.mapCapabilityResponse({
       'available': true,
@@ -32,6 +79,22 @@ void main() {
     expect(state.requiresAllFilesAccess, isTrue);
     expect(state.mode, DeepStorageAccessMode.allFilesAccess);
     expect(state.androidApiLevel, 34);
+  });
+
+  test('maps scoped media file traversal without All Files Access', () {
+    final state = PlatformDeepStorageRecoveryProvider.mapCapabilityResponse({
+      'status': 'available',
+      'available': true,
+      'requiresAllFilesAccess': false,
+      'accessMode': 'scopedMediaRead',
+      'apiLevel': 35,
+      'requestSupported': false,
+    });
+
+    expect(state.available, isTrue);
+    expect(state.mode, DeepStorageAccessMode.scopedMediaRead);
+    expect(state.requiresAllFilesAccess, isFalse);
+    expect(state.requestSupported, isFalse);
   });
 
   test(

@@ -33,7 +33,7 @@ class RestoreReviewItem {
     RestoreRoute.recoveryShield when shieldPreparation?.request != null =>
       shieldPreparation!.request!.relativeDestination ??
           (shieldPreparation!.request!.authorizedDestinationScope != null
-              ? 'Authorized selected folder'
+              ? 'Authorized storage destination'
               : 'Destination required'),
     RestoreRoute.fileCopy => 'Pictures/Photo Recovery & Restore',
     _ => 'Unavailable',
@@ -42,6 +42,8 @@ class RestoreReviewItem {
 
 enum RestoreOutcomeStatus {
   restored,
+  skippedDuplicate,
+  cancelled,
   alreadyPresent,
   userCancelled,
   accessRequired,
@@ -54,15 +56,31 @@ enum RestoreOutcomeStatus {
   platformFailure,
 }
 
+enum RestoreSavedKind {
+  trash,
+  recoverableCopy,
+  thumbnail,
+  existingCopy,
+  recoveryShield,
+}
+
+class RestoreCancellationToken {
+  bool _isCancelled = false;
+  bool get isCancelled => _isCancelled;
+  void cancel() => _isCancelled = true;
+}
+
 class RestoreItemOutcome {
   const RestoreItemOutcome({
     required this.itemId,
     required this.status,
     this.restoredContentUri,
+    this.savedKind,
   });
   final String itemId;
   final RestoreOutcomeStatus status;
   final Uri? restoredContentUri;
+  final RestoreSavedKind? savedKind;
 }
 
 class RestoreBatchOutcome {

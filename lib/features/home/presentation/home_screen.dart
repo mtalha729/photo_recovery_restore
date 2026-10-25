@@ -17,8 +17,7 @@ abstract final class _HomeCardRadii {
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
-    required this.onRecoverPhotos,
-    required this.onDeepPhotoRecovery,
+    required this.onStartPhotoRecovery,
     required this.onSettings,
     required this.onManageShield,
     required this.onRecoveredPhotos,
@@ -30,8 +29,7 @@ class HomeScreen extends StatefulWidget {
     super.key,
   });
 
-  final VoidCallback onRecoverPhotos;
-  final VoidCallback onDeepPhotoRecovery;
+  final VoidCallback onStartPhotoRecovery;
   final VoidCallback onSettings;
   final VoidCallback onManageShield;
   final VoidCallback onRecoveredPhotos;
@@ -89,12 +87,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: AppSpacing.md),
                 const AppSectionHeader(
                   title: 'Recover photos',
-                  description: 'Choose a safe photo recovery scan.',
+                  description: 'Scan accessible photos or review restored items.',
                 ),
                 const SizedBox(height: AppSpacing.sm),
                 _RecoveryTypeGrid(
-                  onRecoverPhotos: widget.onRecoverPhotos,
-                  onDeepPhotoRecovery: widget.onDeepPhotoRecovery,
+                  onStartPhotoRecovery: widget.onStartPhotoRecovery,
                   onRecoveredPhotos: widget.onRecoveredPhotos,
                 ),
                 const SizedBox(height: AppSpacing.lg),
@@ -323,31 +320,22 @@ class _StorageRingPainter extends CustomPainter {
 
 class _RecoveryTypeGrid extends StatelessWidget {
   const _RecoveryTypeGrid({
-    required this.onRecoverPhotos,
-    required this.onDeepPhotoRecovery,
+    required this.onStartPhotoRecovery,
     required this.onRecoveredPhotos,
   });
-  final VoidCallback onRecoverPhotos;
-  final VoidCallback onDeepPhotoRecovery;
+
+  final VoidCallback onStartPhotoRecovery;
   final VoidCallback onRecoveredPhotos;
 
   @override
   Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      _PrimaryRecoveryCard(onPressed: onDeepPhotoRecovery),
+      _PrimaryRecoveryCard(onPressed: onStartPhotoRecovery),
       const SizedBox(height: AppSpacing.md),
-      Row(
+      SizedBox(
         key: const ValueKey('recover-and-history-row'),
-        children: [
-          Expanded(
-            child: _RecoveryTypeTile(
-              type: _RecoveryType.photos,
-              onPressed: onRecoverPhotos,
-            ),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(child: _RecoveredItemsCard(compact: true, onPressed: onRecoveredPhotos)),
-        ],
+        child: _RecoveredItemsCard(onPressed: onRecoveredPhotos),
       ),
     ],
   );
@@ -363,13 +351,15 @@ class _PrimaryRecoveryCard extends StatelessWidget {
     final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.25;
     return Semantics(
       button: true,
-      label: 'Start Deep Photo Recovery',
+      label: 'Recover Photos',
+      excludeSemantics: true,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onPressed,
           borderRadius: BorderRadius.circular(_HomeCardRadii.source),
           child: Ink(
+            key: const ValueKey('recover-photos-card'),
             height: largeText ? 104 : 72,
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF111C35) : const Color(0xFFF7F9FF),
@@ -398,132 +388,14 @@ class _PrimaryRecoveryCard extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Deep Photo Recovery', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                      Text('Search accessible photos', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                      Text('Recover Photos', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                      Text('Scan all accessible photo storage', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                     ],
                   ),
                 ),
                 const Padding(
                   padding: EdgeInsets.all(AppSpacing.md),
                   child: Icon(Icons.arrow_forward_ios_rounded, size: 20, color: AppColors.primary),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ignore: unused_element
-int _compactColumns(BuildContext context, double width) {
-  final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
-  if (largeText || width < 340) return 1;
-  if (width >= 760) return 4;
-  if (width >= 540) return 3;
-  return 2;
-}
-
-// ignore: unused_element
-double _compactCardHeight(BuildContext context) =>
-    MediaQuery.textScalerOf(context).scale(1) > 1.3 ? 156 : 116;
-
-// This application currently implements photo recovery only. Keeping empty
-// video/audio/file actions visible would imply a capability that does not exist.
-enum _RecoveryType { photos }
-
-class _RecoveryTypeTile extends StatelessWidget {
-  const _RecoveryTypeTile({required this.type, required this.onPressed});
-  final _RecoveryType type;
-  final VoidCallback? onPressed;
-
-  Color get _color => switch (type) {
-    _RecoveryType.photos => AppColors.protection,
-  };
-
-  String get _title => switch (type) {
-    _RecoveryType.photos => 'Recover Photos',
-  };
-
-  IconData get _icon => switch (type) {
-    _RecoveryType.photos => Icons.photo_library_outlined,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.25;
-    final surface = Color.alphaBlend(
-      _color.withValues(alpha: isDark ? .14 : .065),
-      isDark ? const Color(0xFF101A2E) : const Color(0xFFF9FBFF),
-    );
-    final border = Color.alphaBlend(
-      _color.withValues(alpha: isDark ? .24 : .14),
-      isDark ? const Color(0xFF2D405E) : const Color(0xFFD8E2F2),
-    );
-    return Semantics(
-      button: true,
-      label: onPressed == null ? '$_title, unavailable' : _title,
-      excludeSemantics: true,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(_HomeCardRadii.source),
-          child: Ink(
-            key: const ValueKey('recover-photos-card'),
-            height: largeText ? 104 : 72,
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 6),
-            decoration: BoxDecoration(
-              color: surface,
-              borderRadius: BorderRadius.circular(_HomeCardRadii.source),
-              border: Border.all(color: border, width: 1.15),
-              boxShadow: [
-                BoxShadow(
-                  color: isDark
-                      ? const Color(0xFF000000).withValues(alpha: .13)
-                      : AppColors.primary.withValues(alpha: .045),
-                  blurRadius: 14,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: _color.withValues(alpha: isDark ? .23 : .13),
-                        borderRadius: BorderRadius.circular(_HomeCardRadii.icon),
-                      ),
-                      child: Icon(
-                        _icon,
-                        size: AppIconSizes.medium,
-                        color: _color,
-                      ),
-                    ),
-                    Icon(
-                      Icons.arrow_forward_rounded,
-                      size: AppIconSizes.medium,
-                      color: _color,
-                    ),
-                  ],
-                ),
-                const Spacer(),
-                Text(
-                  _title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
                 ),
               ],
             ),
@@ -599,11 +471,10 @@ class _ShieldEntryCard extends StatelessWidget {
   }
 }
 
-// ignore: unused_element
 class _RecoveredItemsCard extends StatelessWidget {
-  const _RecoveredItemsCard({this.compact = false, required this.onPressed});
-  final bool compact;
+  const _RecoveredItemsCard({required this.onPressed});
   final VoidCallback onPressed;
+
   @override
   Widget build(BuildContext context) => _CompactRecoveredTile(onPressed: onPressed);
 }

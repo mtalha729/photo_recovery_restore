@@ -89,7 +89,9 @@ class SystemTrashRestoreCoordinator(
         }
 
         try {
-            val unverifiedUris = uris.filter { trashState(it) != false }
+            val unverifiedUris = uris.filter {
+                trashState(it) != false || !isReadable(it)
+            }
             if (unverifiedUris.isNotEmpty()) {
                 result.success(
                     status(
@@ -133,6 +135,10 @@ class SystemTrashRestoreCoordinator(
             }
         }
     }
+
+    private fun isReadable(uri: Uri): Boolean = runCatching {
+        contentResolver.openInputStream(uri)?.use { it.read() >= 0 } == true
+    }.getOrDefault(false)
 
     private fun status(
         value: String,

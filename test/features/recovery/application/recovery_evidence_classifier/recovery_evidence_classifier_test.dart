@@ -7,6 +7,7 @@ import 'package:photo_recovery_restore/features/recovery/domain/deletion_evidenc
 import 'package:photo_recovery_restore/features/recovery/domain/media_candidate.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/media_source.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_classification.dart';
+import 'package:photo_recovery_restore/features/recovery/domain/recovery_discovery_evidence.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_quality.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/restore_capability.dart';
 
@@ -22,6 +23,7 @@ void main() {
   MediaCandidate candidate({
     RecoveryClassification classification = RecoveryClassification.unclassified,
     Iterable<DeletionEvidenceReason> evidence = const [],
+    bool isRecoveryShieldBackup = false,
     RestoreCapability restoreCapability = RestoreCapability.notRestorable,
     RecoveryQuality recoveryQuality = RecoveryQuality.unavailable,
   }) {
@@ -32,6 +34,9 @@ void main() {
       deletionEvidence: DeletionEvidence(reasons: evidence),
       restoreCapability: restoreCapability,
       recoveryQuality: recoveryQuality,
+      discoveryEvidence: RecoveryDiscoveryEvidence(
+        isRecoveryShieldBackup: isRecoveryShieldBackup,
+      ),
     );
   }
 
@@ -65,24 +70,37 @@ void main() {
     },
   );
 
-  test('protected deletion requires explicit protected evidence', () {
+  test('Recovery Shield backup evidence is protected, never deleted proof', () {
     final withoutEvidence = classifier.classify(
       candidate: candidate(
-        classification: RecoveryClassification.protectedDeleted,
+        classification: RecoveryClassification.protectedCopy,
       ),
       existingMediaDecision: noMatch,
     );
     final withEvidence = classifier.classify(
+      candidate: candidate(isRecoveryShieldBackup: true),
+      existingMediaDecision: noMatch,
+    );
+    final shieldWithSourceTrashMetadata = classifier.classify(
       candidate: candidate(
-        evidence: [DeletionEvidenceReason.recoveryShieldRecord],
+        isRecoveryShieldBackup: true,
+        evidence: [DeletionEvidenceReason.systemTrashRecord],
       ),
       existingMediaDecision: noMatch,
     );
 
     expect(withoutEvidence.classification, RecoveryClassification.unclassified);
+    expect(withEvidence.classification, RecoveryClassification.protectedCopy);
+    expect(withEvidence.isProtectedCopy, isTrue);
+    expect(withEvidence.isEligibleForVerifiedDeletedResults, isFalse);
+    expect(withEvidence.deletionEvidence, isEmpty);
     expect(
-      withEvidence.classification,
-      RecoveryClassification.protectedDeleted,
+      shieldWithSourceTrashMetadata.classification,
+      RecoveryClassification.protectedCopy,
+    );
+    expect(
+      shieldWithSourceTrashMetadata.isEligibleForVerifiedDeletedResults,
+      isFalse,
     );
   });
 

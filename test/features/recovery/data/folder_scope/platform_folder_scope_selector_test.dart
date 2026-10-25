@@ -36,6 +36,23 @@ void main() {
     expect(result.scope?.treeUri.scheme, 'content');
   });
 
+  test('restore destination selection uses the dedicated SAF intent', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'selectDestinationFolder');
+          return {
+            'status': 'selected',
+            'treeUri': 'content://provider/tree/restore-target',
+            'documentId': 'primary:Pictures/Recovery',
+          };
+        });
+
+    final result = await selector.selectDestinationFolder();
+
+    expect(result.status, FolderScopeSelectionStatus.selected);
+    expect(result.scope?.treeUri, Uri.parse('content://provider/tree/restore-target'));
+  });
+
   test('selected scope keeps unknown volume identity unknown', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(

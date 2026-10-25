@@ -56,18 +56,22 @@ class MediaSourceResolver {
   }
 
   MessagingProvider? _messagingProvider(String location) {
-    if (_containsSegment(location, const {
-      'whatsapp',
-      'whatsapp images',
-      'com.whatsapp',
-    })) {
+    final segments = location.split('/');
+    if (segments.any(
+      (segment) =>
+          segment == 'whatsapp' ||
+          segment.startsWith('whatsapp ') ||
+          segment == 'com.whatsapp' ||
+          segment == 'com.whatsapp.w4b',
+    )) {
       return MessagingProvider.whatsApp;
     }
-    if (_containsSegment(location, const {
-      'telegram',
-      'telegram images',
-      'org.telegram.messenger',
-    })) {
+    if (segments.any(
+      (segment) =>
+          segment == 'telegram' ||
+          segment.startsWith('telegram ') ||
+          segment == 'org.telegram.messenger',
+    )) {
       return MessagingProvider.telegram;
     }
     if (_containsSegment(location, const {'signal', 'messenger', 'viber'})) {

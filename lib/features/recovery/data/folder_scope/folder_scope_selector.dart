@@ -25,5 +25,8 @@ class FolderScopeSelectionResult {
 abstract interface class FolderScopeSelector {
   Future<FolderScopeSelectionResult> selectFolder();
 
+  /// Requests an explicit read/write SAF tree grant for a restore destination.
+  Future<FolderScopeSelectionResult> selectDestinationFolder();
+
   Future<FolderScopeSelectionResult> checkGrant(AuthorizedFolderScope scope);
 }

@@ -33,19 +33,34 @@ class PlatformFileCopyRestorer implements FileCopyRestorer {
     : _channel = const MethodChannel(_channelName);
   const PlatformFileCopyRestorer.withChannel(this._channel);
 
-  static const _channelName =
-      'com.photorecoveryrestore.app/file_copy_restore';
+  static const _channelName = 'com.photorecoveryrestore.app/file_copy_restore';
   final MethodChannel _channel;
 
   @override
   Future<FileCopyRestoreResult> restore(FileCopyRestoreRequest request) async {
     final candidate = request.candidate;
+    final sourceUri = candidate.documentUri ?? candidate.contentUri;
+    final filePath = candidate.filePath;
+    if ((sourceUri == null || sourceUri.scheme != 'content') &&
+        (filePath == null || filePath.trim().isEmpty)) {
+      return const FileCopyRestoreResult(
+        FileCopyRestoreStatus.sourceUnavailable,
+      );
+    }
     try {
       final raw = await _channel.invokeMethod<Object?>('restoreFileCopy', {
-        'filePath': candidate.filePath,
+        if (sourceUri != null && sourceUri.scheme == 'content')
+          'sourceUri': sourceUri.toString()
+        else
+          'filePath': filePath,
         'displayName': candidate.displayName,
         'mimeType': candidate.mimeType,
         'expectedSize': candidate.byteSize,
+        if (candidate.discoveryEvidence.isEmbeddedPayload) ...{
+          'containerPath': candidate.discoveryEvidence.containerPath,
+          'embeddedOffset': candidate.discoveryEvidence.embeddedOffset,
+          'detectedFormat': candidate.discoveryEvidence.detectedFormat,
+        },
       });
       if (raw is! Map<Object?, Object?>) {
         return const FileCopyRestoreResult(

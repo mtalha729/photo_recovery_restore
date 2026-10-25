@@ -13,11 +13,15 @@ class DeepScanMetadataCache(context: Context) {
     }
     private val pending = LinkedHashMap<String, String>()
 
+    init {
+        prunePersistedEntries()
+    }
+
     @Synchronized
     fun get(volume: String, relativePath: String, size: Long, modified: Long): ImageSignatureResult? {
         val key = key(volume, relativePath)
         memory[key]?.let { entry ->
-            if (isExpired(entry)) {
+            if (isExpired(entry) || !isStable(entry.signature)) {
                 removeExpired(key)
                 return null
             }
@@ -25,7 +29,7 @@ class DeepScanMetadataCache(context: Context) {
         }
         val raw = preferences.getString(key, null) ?: return null
         val entry = decode(raw) ?: return null
-        if (isExpired(entry)) {
+        if (isExpired(entry) || !isStable(entry.signature)) {
             removeExpired(key)
             return null
         }
@@ -41,6 +45,7 @@ class DeepScanMetadataCache(context: Context) {
         modified: Long,
         signature: ImageSignatureResult,
     ) {
+        if (!isStable(signature)) return
         val key = key(volume, relativePath)
         val entry = CacheEntry(size, modified, System.currentTimeMillis(), signature)
         memory[key] = entry
@@ -67,6 +72,31 @@ class DeepScanMetadataCache(context: Context) {
 
     private fun isExpired(entry: CacheEntry): Boolean =
         entry.savedAtMillis <= 0L || System.currentTimeMillis() - entry.savedAtMillis > MAX_AGE_MILLIS
+
+    private fun isStable(signature: ImageSignatureResult): Boolean =
+        signature.state != "unavailable" && signature.state != "corrupted"
+
+    /** Bounds persistent metadata-only cache growth after interrupted/old scans. */
+    private fun prunePersistedEntries() {
+        val persisted = preferences.all.entries.mapNotNull { (key, raw) ->
+            if (!key.startsWith("v:")) return@mapNotNull null
+            val entry = (raw as? String)?.let(::decode)
+            if (entry == null || isExpired(entry) || !isStable(entry.signature)) key to null
+            else key to entry.savedAtMillis
+        }
+        val valid = persisted.filter { it.second != null }
+            .sortedByDescending { it.second }
+            .take(MAX_PERSISTED_ENTRIES)
+            .mapTo(mutableSetOf()) { it.first }
+        val remove = persisted.asSequence()
+            .map { it.first }
+            .filterNot(valid::contains)
+            .toList()
+        if (remove.isEmpty()) return
+        val editor = preferences.edit()
+        remove.forEach(editor::remove)
+        editor.apply()
+    }
 
     private fun decode(raw: String): CacheEntry? = runCatching {
         val row = JSONObject(raw)
@@ -107,6 +137,7 @@ class DeepScanMetadataCache(context: Context) {
 
     companion object {
         private const val MAX_MEMORY_ENTRIES = 512
+        private const val MAX_PERSISTED_ENTRIES = 10000
         private const val PERSIST_BATCH_SIZE = 64
         private const val MAX_AGE_MILLIS = 14L * 24L * 60L * 60L * 1000L
     }

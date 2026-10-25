@@ -10,21 +10,30 @@ import io.flutter.plugin.common.MethodChannel
 
 class FolderTreeSelectionCoordinator(private val activity: Activity) {
     private var pendingResult: MethodChannel.Result? = null
+    private var pendingRequiresWrite = false
 
-    fun selectFolder(result: MethodChannel.Result) {
+    fun selectFolder(result: MethodChannel.Result) = selectFolder(result, requireWrite = false)
+
+    fun selectDestinationFolder(result: MethodChannel.Result) =
+        selectFolder(result, requireWrite = true)
+
+    private fun selectFolder(result: MethodChannel.Result, requireWrite: Boolean) {
         if (pendingResult != null) {
             result.success(response("operationInProgress", "Folder selection is already active."))
             return
         }
         pendingResult = result
+        pendingRequiresWrite = requireWrite
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (requireWrite) addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         try {
             activity.startActivityForResult(intent, REQUEST_CODE)
         } catch (_: Exception) {
             pendingResult = null
+            pendingRequiresWrite = false
             result.success(response("platformFailure", "Folder selection is unavailable."))
         }
     }
@@ -47,7 +56,9 @@ class FolderTreeSelectionCoordinator(private val activity: Activity) {
     fun handleActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
         if (requestCode != REQUEST_CODE) return false
         val result = pendingResult ?: return true
+        val requiresWrite = pendingRequiresWrite
         pendingResult = null
+        pendingRequiresWrite = false
         if (resultCode != Activity.RESULT_OK) {
             result.success(response("cancelled", null))
             return true
@@ -66,10 +77,29 @@ class FolderTreeSelectionCoordinator(private val activity: Activity) {
             result.success(response("restrictedLocation", "Android does not permit this folder scope."))
             return true
         }
+        val requiredFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            (if (requiresWrite) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+        val grantedFlags = (data?.flags ?: 0) and (
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        )
+        if ((grantedFlags and requiredFlags) != requiredFlags) {
+            result.success(
+                response(
+                    "accessUnavailable",
+                    if (requiresWrite) {
+                        "The selected folder did not grant read and write access."
+                    } else {
+                        "The selected folder did not grant read access."
+                    },
+                ),
+            )
+            return true
+        }
         try {
             activity.contentResolver.takePersistableUriPermission(
                 treeUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                grantedFlags and requiredFlags,
             )
             result.success(selectedResponse(treeUri))
         } catch (_: SecurityException) {
@@ -83,6 +113,7 @@ class FolderTreeSelectionCoordinator(private val activity: Activity) {
     fun dispose() {
         pendingResult?.success(response("platformFailure", "Folder selection was interrupted."))
         pendingResult = null
+        pendingRequiresWrite = false
     }
 
     private fun selectedResponse(treeUri: Uri): Map<String, Any?> {

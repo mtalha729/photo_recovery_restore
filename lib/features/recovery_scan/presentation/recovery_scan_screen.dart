@@ -4,7 +4,9 @@ import '../../../app/design_system/components/app_components.dart';
 import '../../../app/design_system/foundations/app_breakpoints.dart';
 import '../../../app/design_system/foundations/app_tokens.dart';
 import '../../recovery/domain/media_candidate.dart';
+import '../../recovery/data/deep_storage/deep_storage_recovery_provider.dart';
 import '../../recovery/domain/recovery_classification.dart';
+import '../../recovery/domain/recovery_result_kind.dart';
 import '../../recovery/domain/media_source.dart';
 import '../../restore_ux/application/restore_ux_coordinator.dart';
 import '../../restore_ux/application/restore_ux_models.dart';
@@ -12,6 +14,7 @@ import '../../restore_ux/presentation/photo_detail_screen.dart';
 import '../application/recovery_scan_controller.dart';
 import '../application/recovery_scan_models.dart';
 import 'recovery_thumbnail.dart';
+import 'photo_recovery_access_screen.dart';
 
 class RecoveryScanScreen extends StatefulWidget {
   const RecoveryScanScreen({
@@ -19,10 +22,12 @@ class RecoveryScanScreen extends StatefulWidget {
     this.onRestoreIntent,
     this.onRestoreReview,
     this.restoreCoordinator,
+    this.startImmediately = true,
     super.key,
   });
 
   final RecoveryScanController controller;
+  final bool startImmediately;
   final ValueChanged<List<MediaCandidate>>? onRestoreIntent;
   final ValueChanged<List<RestoreReviewItem>>? onRestoreReview;
   final RestoreUxCoordinator? restoreCoordinator;
@@ -34,37 +39,69 @@ class RecoveryScanScreen extends StatefulWidget {
 class _RecoveryScanScreenState extends State<RecoveryScanScreen>
     with WidgetsBindingObserver {
   final Set<String> _selectedIds = {};
+  List<MediaCandidate>? _groupVerifiedItems;
+  List<MediaCandidate>? _groupPossibleCopies;
+  List<_SourceGroup>? _cachedGroups;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.controller.addListener(_refresh);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.controller.start();
-    });
+    if (widget.startImmediately) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _startWithStorageAccess();
+      });
+    }
   }
 
   @override
   void didUpdateWidget(covariant RecoveryScanScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller == widget.controller) return;
-    oldWidget.controller.removeListener(_refresh);
-    widget.controller.addListener(_refresh);
-    _selectedIds.clear();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.controller.start();
-    });
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_refresh);
+      oldWidget.controller.cancel();
+      widget.controller.addListener(_refresh);
+      _selectedIds.clear();
+      _cachedGroups = null;
+    }
+    if (widget.startImmediately &&
+        (!oldWidget.startImmediately ||
+            oldWidget.controller != widget.controller)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _startWithStorageAccess();
+      });
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_refresh);
+    widget.controller.cancel();
     super.dispose();
   }
 
   void _refresh() => setState(() {});
+
+  Future<void> _startWithStorageAccess() async {
+    const provider = PlatformDeepStorageRecoveryProvider();
+    final capability = await provider.getCapability();
+    if (!mounted) return;
+    if (capability.requestSupported &&
+        capability.mode != DeepStorageAccessMode.allFilesAccess) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (accessContext) => PhotoRecoveryAccessScreen(
+            provider: provider,
+            onAccessAvailable: () => Navigator.of(accessContext).pop(),
+          ),
+        ),
+      );
+      if (!mounted) return;
+    }
+    await widget.controller.start();
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -94,21 +131,17 @@ class _RecoveryScanScreenState extends State<RecoveryScanScreen>
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.md),
                 child: AppPrimaryButton(
-                  label: 'Restore selected (${_selectedIds.length})',
+                  label: _selectedActionLabel(state),
                   icon: Icons.restore_rounded,
                   onPressed: () {
-                    final selected = state.verifiedItems
-                        .where((item) => _selectedIds.contains(item.id))
-                        .toList(growable: false);
-                    if (widget.onRestoreReview != null) {
-                      widget.onRestoreReview!(
-                        selected
-                            .map(widget.controller.reviewItemFor)
-                            .toList(growable: false),
-                      );
-                      return;
-                    }
-                    widget.onRestoreIntent?.call(selected);
+                    final selected =
+                        <MediaCandidate>[
+                              ...state.verifiedItems,
+                              ...state.possibleCopies,
+                            ]
+                            .where((item) => _selectedIds.contains(item.id))
+                            .toList(growable: false);
+                    _reviewSelected(selected);
                   },
                 ),
               ),
@@ -116,25 +149,74 @@ class _RecoveryScanScreenState extends State<RecoveryScanScreen>
     );
   }
 
+  void _reviewSelected(List<MediaCandidate> selected) {
+    if (widget.onRestoreReview != null) {
+      widget.onRestoreReview!(
+        selected.map(widget.controller.reviewItemFor).toList(growable: false),
+      );
+      return;
+    }
+    widget.onRestoreIntent?.call(selected);
+  }
+
+  String _selectedActionLabel(RecoveryScanViewState state) {
+    final selected = <MediaCandidate>[
+      ...state.verifiedItems,
+      ...state.possibleCopies,
+    ].where((item) => _selectedIds.contains(item.id)).toList(growable: false);
+    final copyCount = selected
+        .where(
+          (item) =>
+              item.classification == RecoveryClassification.possibleCopy ||
+              item.classification == RecoveryClassification.existingMedia,
+        )
+        .length;
+    if (selected.isNotEmpty && copyCount == selected.length) {
+      return 'Save copies (${selected.length})';
+    }
+    if (copyCount > 0) return 'Review selected (${selected.length})';
+    return 'Restore selected (${selected.length})';
+  }
+
   Widget _body(RecoveryScanViewState state) => switch (state.status) {
-    RecoveryScanViewStatus.idle ||
-    RecoveryScanViewStatus.running ||
-    RecoveryScanViewStatus.cancelling => _ScanningState(
+    RecoveryScanViewStatus.idle => _ScanningState(
       state: state,
       onCancel: widget.controller.cancel,
     ),
-    RecoveryScanViewStatus.cancelled => const _MessageState(
-      icon: Icons.stop_circle_outlined,
-      title: 'Scan cancelled',
-      message: 'No incomplete scan is presented as a finished result.',
-    ),
+    RecoveryScanViewStatus.running || RecoveryScanViewStatus.cancelling =>
+      state.verifiedItems.isNotEmpty || state.possibleCopies.isNotEmpty
+          ? _resultsView(state, isScanning: true)
+          : _ScanningState(state: state, onCancel: widget.controller.cancel),
+    RecoveryScanViewStatus.cancelled =>
+      state.verifiedItems.isNotEmpty || state.possibleCopies.isNotEmpty
+          ? _resultsView(state)
+          : _MessageState(
+              icon: Icons.stop_circle_outlined,
+              title: 'Scan cancelled',
+              message:
+                  state.message ??
+                  'The scan was cancelled. Any completed results are retained.',
+            ),
     RecoveryScanViewStatus.empty => _MessageState(
       icon: Icons.search_off_rounded,
-      title: state.deepCapabilityMessage == null
-          ? 'No recoverable photos found'
-          : 'Photo scan complete',
-      message: state.deepCapabilityMessage ?? 'No verified deleted photos or recoverable copies were found. Existing photos are never shown as deleted.',
+      title: 'No recoverable photos found',
+      message: state.message?.isNotEmpty == true ? state.message! : 'No recoverable photos were found in the locations available to this device. Existing photos are never shown as deleted.',
     ),
+    RecoveryScanViewStatus.emptyRestricted => _MessageState(
+      icon: Icons.info_outline_rounded,
+      title: 'Scan complete',
+      message: state.message?.isNotEmpty == true ? state.message! : 'No recoverable photos were found. Some protected locations could not be checked.',
+    ),
+    RecoveryScanViewStatus.partial =>
+      state.verifiedItems.isNotEmpty || state.possibleCopies.isNotEmpty
+          ? _resultsView(state)
+          : _MessageState(
+              icon: Icons.warning_amber_rounded,
+              title: 'Scan ended with partial coverage',
+              message:
+                  state.message ??
+                  'Coverage was partial. Results already found are retained.',
+            ),
     RecoveryScanViewStatus.unsupported => const _MessageState(
       icon: Icons.info_outline_rounded,
       title: 'This scan is not supported',
@@ -156,19 +238,51 @@ class _RecoveryScanScreenState extends State<RecoveryScanScreen>
       title: 'Scan could not finish',
       message: state.message ?? 'Try again when the source is available.',
     ),
-    RecoveryScanViewStatus.complete => _ResultsState(
-      state: state,
-      selectedIds: _selectedIds,
-      onSelectionChanged: (id, selected) => setState(() {
-        selected ? _selectedIds.add(id) : _selectedIds.remove(id);
-      }),
-      onSelectAll: () => setState(() {
-        _selectedIds.addAll(state.verifiedItems.map((item) => item.id));
-      }),
-      onClear: () => setState(_selectedIds.clear),
-      onOpenDetails: _openDetails,
-    ),
+    RecoveryScanViewStatus.complete ||
+    RecoveryScanViewStatus.completeRestricted => _resultsView(state),
   };
+
+  Widget _resultsView(RecoveryScanViewState state, {bool isScanning = false}) =>
+      _ResultsState(
+        state: state,
+        controller: widget.controller,
+        currentGroups: () => _groupsFor(widget.controller.state),
+        groups: _groupsFor(state),
+        isScanning: isScanning,
+        onCancel: widget.controller.cancel,
+        selectedIds: _selectedIds,
+        onSelectionChanged: (id, selected) => setState(() {
+          selected ? _selectedIds.add(id) : _selectedIds.remove(id);
+        }),
+        onSelectionBatch: (ids, selected) => setState(() {
+          selected ? _selectedIds.addAll(ids) : _selectedIds.removeAll(ids);
+        }),
+        onSelectAll: () => setState(() {
+          _selectedIds.addAll([
+            ...state.verifiedItems.map((item) => item.id),
+            ...state.possibleCopies.map((item) => item.id),
+          ]);
+        }),
+        onClear: () => setState(_selectedIds.clear),
+        onOpenDetails: _openDetails,
+        onReviewSelected: _reviewSelected,
+      );
+
+  List<_SourceGroup> _groupsFor(RecoveryScanViewState state) {
+    if (_cachedGroups != null &&
+        identical(_groupVerifiedItems, state.verifiedItems) &&
+        identical(_groupPossibleCopies, state.possibleCopies)) {
+      return _cachedGroups!;
+    }
+    final groups = _sourceGroups([
+      ...state.verifiedItems,
+      ...state.possibleCopies,
+    ]);
+    _groupVerifiedItems = state.verifiedItems;
+    _groupPossibleCopies = state.possibleCopies;
+    _cachedGroups = groups;
+    return groups;
+  }
 
   Future<void> _openDetails(MediaCandidate candidate) async {
     final item = widget.controller.reviewItemFor(candidate);
@@ -204,7 +318,7 @@ class _ScanTopBar extends StatelessWidget {
         const SizedBox(width: AppSpacing.xs),
         Expanded(
           child: Text(
-            selectedCount == 0 ? source.label : '$selectedCount selected',
+            selectedCount == 0 ? 'Results' : '$selectedCount selected',
             style: Theme.of(context).textTheme.titleLarge,
           ),
         ),
@@ -433,6 +547,9 @@ class _ScanStatisticTile extends StatelessWidget {
 }
 
 String _scanHeadline(RecoveryScanViewState state) {
+  if (state.scanPhase.toLowerCase().contains('selected folder')) {
+    return 'Scanning a folder you chose';
+  }
   if (state.scanPhase.toLowerCase().contains('deep')) {
     final area = (state.currentScanArea ?? '').toLowerCase();
     if (area.contains('cache') ||
@@ -454,6 +571,8 @@ String _scanHeadline(RecoveryScanViewState state) {
 
 String _friendlyScanArea(RecoveryScanViewState state) {
   final area = (state.currentScanArea ?? '').toLowerCase();
+  if (area.contains('waiting for folder')) return 'Folder selection';
+  if (area.contains('user-authorized folder')) return 'Selected folder';
   if (area.contains('screenshot')) return 'Screenshots';
   if (area.contains('download')) return 'Downloads';
   if (area.contains('messag') ||
@@ -487,45 +606,91 @@ String _friendlyScanArea(RecoveryScanViewState state) {
     RecoveryScanSource.downloads => 'Downloads',
     RecoveryScanSource.messaging => 'Messaging',
     RecoveryScanSource.sdCard => 'SD card',
-    RecoveryScanSource.customFolder => 'Other storage',
     RecoveryScanSource.allPhotos => 'Shared media',
   };
 }
 
-class _ResultsState extends StatefulWidget {
+class _CompactScanProgress extends StatelessWidget {
+  const _CompactScanProgress({required this.state, required this.onCancel});
+
+  final RecoveryScanViewState state;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) => PremiumSurface(
+    child: Row(
+      children: [
+        const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Scanning photos',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              Text(
+                '${state.progress.processedCount} checked · ${state.verifiedItems.length + state.possibleCopies.length} found',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        TextButton(onPressed: onCancel, child: const Text('Cancel')),
+      ],
+    ),
+  );
+}
+
+class _CoverageNotice extends StatelessWidget {
+  const _CoverageNotice();
+
+  @override
+  Widget build(BuildContext context) => PremiumSurface(
+    child: Text(
+      'Some locations could not be checked. Photos already found are still available.',
+      style: Theme.of(context).textTheme.bodySmall,
+    ),
+  );
+}
+
+class _ResultsState extends StatelessWidget {
   const _ResultsState({
     required this.state,
+    required this.controller,
+    required this.currentGroups,
+    required this.groups,
+    required this.isScanning,
+    required this.onCancel,
     required this.selectedIds,
     required this.onSelectionChanged,
+    required this.onSelectionBatch,
     required this.onSelectAll,
     required this.onClear,
     required this.onOpenDetails,
+    required this.onReviewSelected,
   });
   final RecoveryScanViewState state;
+  final RecoveryScanController controller;
+  final List<_SourceGroup> Function() currentGroups;
+  final List<_SourceGroup> groups;
+  final bool isScanning;
+  final VoidCallback onCancel;
   final Set<String> selectedIds;
   final void Function(String id, bool selected) onSelectionChanged;
+  final void Function(Iterable<String> ids, bool selected) onSelectionBatch;
   final VoidCallback onSelectAll;
   final VoidCallback onClear;
   final ValueChanged<MediaCandidate> onOpenDetails;
-
-  @override
-  State<_ResultsState> createState() => _ResultsStateState();
-}
-
-class _ResultsStateState extends State<_ResultsState> {
-  bool _deletedOnly = false;
+  final ValueChanged<List<MediaCandidate>> onReviewSelected;
 
   @override
   Widget build(BuildContext context) {
-    final items = _deletedOnly
-        ? widget.state.verifiedItems.where(
-            (item) => item.isDeletedRecoveryResult,
-          )
-        : <MediaCandidate>[
-            ...widget.state.verifiedItems,
-            ...widget.state.possibleCopies,
-          ];
-    final groups = _sourceGroups(items);
     return ResponsiveContent(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.lg,
@@ -535,64 +700,51 @@ class _ResultsStateState extends State<_ResultsState> {
       ),
       child: CustomScrollView(
         slivers: [
-          if (widget.state.deepCapabilityMessage != null)
+          if (isScanning)
             SliverToBoxAdapter(
-              child: PremiumSurface(
-                child: Text(widget.state.deepCapabilityMessage!),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: _CompactScanProgress(state: state, onCancel: onCancel),
               ),
             ),
-          if (widget.state.deepCapabilityMessage != null)
-            const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
-          if (widget.state.isLimitedAccess)
-            const SliverToBoxAdapter(
-              child: PremiumSurface(
-                child: Text(
-                  'Limited photo access: only user-selected accessible photos were checked. This is not a full-library scan.',
-                ),
+          if (!isScanning &&
+              (state.status == RecoveryScanViewStatus.partial ||
+                  state.status == RecoveryScanViewStatus.completeRestricted ||
+                  state.isLimitedAccess))
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: const _CoverageNotice(),
               ),
             ),
-          if (widget.state.isLimitedAccess)
-            const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
           SliverToBoxAdapter(
             child: AppSectionHeader(
-              title: 'Results',
-              description: _deletedOnly
-                  ? 'Only items with verified deletion evidence are shown.'
-                  : 'Deleted photos and surviving recoverable copies are separate.',
-              action: widget.selectedIds.isEmpty
+              title: 'Deleted Photos',
+              description: 'Verified deletions and possible surviving copies are separate; a possible copy is not confirmed deleted.',
+              action: selectedIds.isEmpty
                   ? TextButton(
-                      onPressed: widget.onSelectAll,
+                      onPressed: onSelectAll,
                       child: const Text('Select all'),
                     )
-                  : TextButton(
-                      onPressed: widget.onClear,
-                      child: const Text('Clear'),
-                    ),
+                  : TextButton(onPressed: onClear, child: const Text('Clear')),
             ),
           ),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.only(top: AppSpacing.sm),
               child: _ResultsSummary(
-                verifiedDeletedCount: widget.state.verifiedItems.length,
-                possibleCopyCount: widget.state.possibleCopies.length,
+                verifiedDeletedCount: state.verifiedItems.length,
+                possibleCopyCount: state.possibleCopies.length,
               ),
             ),
           ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.sm),
-              child: SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: false, label: Text('All Recoveries')),
-                  ButtonSegment(value: true, label: Text('Deleted Photos')),
-                ],
-                selected: {_deletedOnly},
-                onSelectionChanged: (selection) =>
-                    setState(() => _deletedOnly = selection.first),
+          if (groups.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(AppSpacing.lg),
+                child: Text('No recovery candidates found yet.'),
               ),
             ),
-          ),
           for (final group in groups) ...[
             const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
             SliverToBoxAdapter(
@@ -602,7 +754,15 @@ class _ResultsStateState extends State<_ResultsState> {
                   MaterialPageRoute(
                     builder: (_) => _CategoryGridScreen(
                       group: group,
-                      onOpenDetails: widget.onOpenDetails,
+                      controller: controller,
+                      currentGroup: () => currentGroups()
+                          .where((value) => value.label == group.label)
+                          .firstOrNull,
+                      onOpenDetails: onOpenDetails,
+                      selectedIds: selectedIds,
+                      onSelectionChanged: onSelectionChanged,
+                      onSelectionBatch: onSelectionBatch,
+                      onReviewSelected: onReviewSelected,
                     ),
                   ),
                 ),
@@ -629,6 +789,7 @@ class _ResultsSummary extends StatelessWidget {
     spacing: AppSpacing.sm,
     runSpacing: AppSpacing.xs,
     children: [
+      Text('Recovery candidates  ${verifiedDeletedCount + possibleCopyCount}'),
       Semantics(
         label: '$verifiedDeletedCount verified deleted photos',
         child: Text(
@@ -689,32 +850,64 @@ class _CategoryCard extends StatelessWidget {
                     group.label,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  Text(_groupSummary(group)),
+                  Text(
+                    '${group.items.length} photos · ${_groupSummary(group)}',
+                  ),
                   const SizedBox(height: AppSpacing.sm),
-                  SizedBox(
-                    height: 52,
-                    child: Row(
-                      children: [
-                        for (final item in group.items.take(4))
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              right: AppSpacing.xs,
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: SizedBox(
-                                width: 52,
-                                height: 52,
-                                child: RecoveryThumbnail(
-                                  semanticLabel: '${group.label} preview',
-                                  contentUri: item.contentUri,
-                                  filePath: item.filePath,
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final visible = (constraints.maxWidth / 60).floor().clamp(
+                        1,
+                        4,
+                      );
+                      return SizedBox(
+                        height: 52,
+                        child: Row(
+                          children: [
+                            for (final indexed
+                                in group.items.take(visible).indexed)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  right: AppSpacing.xs,
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: SizedBox(
+                                    width: 52,
+                                    height: 52,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        RecoveryThumbnail(
+                                          semanticLabel:
+                                              '${group.label} preview',
+                                          contentUri:
+                                              indexed.$2.contentUri ??
+                                              indexed.$2.documentUri,
+                                          filePath: indexed.$2.filePath,
+                                        ),
+                                        if (indexed.$1 == visible - 1 &&
+                                            group.items.length > visible)
+                                          ColoredBox(
+                                            color: Colors.black54,
+                                            child: Center(
+                                              child: Text(
+                                                '+${group.items.length - visible}',
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
-                      ],
-                    ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -727,56 +920,113 @@ class _CategoryCard extends StatelessWidget {
   );
 }
 
-class _CategoryGridScreen extends StatelessWidget {
-  const _CategoryGridScreen({required this.group, required this.onOpenDetails});
+class _CategoryGridScreen extends StatefulWidget {
+  const _CategoryGridScreen({
+    required this.group,
+    required this.controller,
+    required this.currentGroup,
+    required this.onOpenDetails,
+    required this.selectedIds,
+    required this.onSelectionChanged,
+    required this.onSelectionBatch,
+    required this.onReviewSelected,
+  });
   final _SourceGroup group;
+  final RecoveryScanController controller;
+  final _SourceGroup? Function() currentGroup;
   final ValueChanged<MediaCandidate> onOpenDetails;
+  final Set<String> selectedIds;
+  final void Function(String id, bool selected) onSelectionChanged;
+  final void Function(Iterable<String> ids, bool selected) onSelectionBatch;
+  final ValueChanged<List<MediaCandidate>> onReviewSelected;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(group.label)),
+  State<_CategoryGridScreen> createState() => _CategoryGridScreenState();
+}
+
+class _CategoryGridScreenState extends State<_CategoryGridScreen> {
+  late final Set<String> _selectedIds = widget.group.items
+      .where((item) => widget.selectedIds.contains(item.id))
+      .map((item) => item.id)
+      .toSet();
+
+  void _toggle(String id, bool selected) {
+    setState(() => selected ? _selectedIds.add(id) : _selectedIds.remove(id));
+    widget.onSelectionChanged(id, selected);
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.controller,
+    builder: (context, _) {
+      final group = widget.currentGroup() ?? widget.group;
+      return _buildGrid(context, group);
+    },
+  );
+
+  Widget _buildGrid(BuildContext context, _SourceGroup group) => Scaffold(
+    appBar: AppBar(
+      title: Text(group.label),
+      actions: [
+        TextButton(
+          onPressed: () {
+            final visibleIds = group.items.map((item) => item.id).toSet();
+            final allSelected = visibleIds.every(_selectedIds.contains);
+            setState(() {
+              if (allSelected) {
+                _selectedIds.removeAll(visibleIds);
+              } else {
+                _selectedIds.addAll(visibleIds);
+              }
+            });
+            widget.onSelectionBatch(visibleIds, !allSelected);
+          },
+          child: Text(
+            group.items.every((item) => _selectedIds.contains(item.id))
+                ? 'Deselect all'
+                : 'Select all',
+          ),
+        ),
+      ],
+    ),
     body: LayoutBuilder(
       builder: (context, constraints) => CustomScrollView(
         slivers: [
-          if (group.verifiedDeleted.isNotEmpty) ...[
-            SliverToBoxAdapter(
-              child: _ResultSectionHeader(
-                title: 'Verified deleted',
-                count: group.verifiedDeleted.length,
-                description: 'Items with explicit deletion evidence',
-              ),
+          SliverToBoxAdapter(
+            child: _ResultSectionHeader(
+              title: 'Photos',
+              count: group.items.length,
+              description: 'Each photo retains its actual status in details.',
             ),
-            _ResultPhotoGrid(
-              items: group.verifiedDeleted,
-              crossAxisCount: AppPhotoGrid.columnsFor(
-                constraints.maxWidth,
-                minimumWidth: 150,
-              ),
-              onOpenDetails: onOpenDetails,
+          ),
+          _ResultPhotoGrid(
+            items: group.items,
+            crossAxisCount: AppPhotoGrid.columnsFor(
+              constraints.maxWidth,
+              minimumWidth: 150,
             ),
-          ],
-          if (group.possibleCopies.isNotEmpty) ...[
-            SliverToBoxAdapter(
-              child: _ResultSectionHeader(
-                title: 'Possible copies',
-                count: group.possibleCopies.length,
-                description:
-                    'Accessible copies, not verified deleted originals',
-              ),
-            ),
-            _ResultPhotoGrid(
-              items: group.possibleCopies,
-              crossAxisCount: AppPhotoGrid.columnsFor(
-                constraints.maxWidth,
-                minimumWidth: 150,
-              ),
-              onOpenDetails: onOpenDetails,
-            ),
-          ],
+            onOpenDetails: widget.onOpenDetails,
+            selectedIds: _selectedIds,
+            onSelectionChanged: _toggle,
+          ),
           const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.lg)),
         ],
       ),
     ),
+    bottomNavigationBar: _selectedIds.isEmpty
+        ? null
+        : SafeArea(
+            minimum: const EdgeInsets.all(AppSpacing.md),
+            child: AppPrimaryButton(
+              label: 'Review selected (${_selectedIds.length})',
+              icon: Icons.restore_rounded,
+              onPressed: () => widget.onReviewSelected(
+                group.items
+                    .where((item) => _selectedIds.contains(item.id))
+                    .toList(growable: false),
+              ),
+            ),
+          ),
   );
 }
 
@@ -823,11 +1073,15 @@ class _ResultPhotoGrid extends StatelessWidget {
     required this.items,
     required this.crossAxisCount,
     required this.onOpenDetails,
+    required this.selectedIds,
+    required this.onSelectionChanged,
   });
 
   final List<MediaCandidate> items;
   final int crossAxisCount;
   final ValueChanged<MediaCandidate> onOpenDetails;
+  final Set<String> selectedIds;
+  final void Function(String id, bool selected) onSelectionChanged;
 
   @override
   Widget build(BuildContext context) => SliverPadding(
@@ -836,15 +1090,30 @@ class _ResultPhotoGrid extends StatelessWidget {
       delegate: SliverChildBuilderDelegate((context, index) {
         final item = items[index];
         return Semantics(
+          key: ValueKey(item.id),
           button: true,
           label: '${item.displayName ?? 'Photo'}, ${stateLabel(item)}',
-          child: InkWell(
-            onTap: () => onOpenDetails(item),
-            child: RecoveryThumbnail(
-              semanticLabel: '${item.displayName ?? 'Photo'} preview',
-              contentUri: item.contentUri,
-              filePath: item.filePath,
-            ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              InkWell(
+                onTap: () => onOpenDetails(item),
+                child: RecoveryThumbnail(
+                  semanticLabel: '${item.displayName ?? 'Photo'} preview',
+                  contentUri: item.contentUri ?? item.documentUri,
+                  filePath: item.filePath,
+                ),
+              ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Checkbox(
+                  value: selectedIds.contains(item.id),
+                  onChanged: (value) =>
+                      onSelectionChanged(item.id, value ?? false),
+                ),
+              ),
+            ],
           ),
         );
       }, childCount: items.length),
@@ -860,48 +1129,66 @@ class _ResultPhotoGrid extends StatelessWidget {
 IconData _categoryIcon(String label) => switch (label) {
   'Camera & Gallery' => Icons.photo_camera_outlined,
   'Screenshots' => Icons.screenshot_outlined,
-  'Downloads / Saved' => Icons.download_outlined,
-  'Messaging' => Icons.forum_outlined,
-  'Cache & Thumbnails' => Icons.collections_outlined,
-  'App Media' => Icons.apps_outlined,
+  'Downloads & Saved' => Icons.download_outlined,
+  'WhatsApp & Messaging' => Icons.forum_outlined,
+  'Thumbnails & Cache' => Icons.collections_outlined,
+  'Hidden Images' => Icons.visibility_off_outlined,
   'SD Card' => Icons.sd_card_outlined,
   _ => Icons.folder_outlined,
 };
 
 String stateLabel(MediaCandidate candidate) =>
-    candidate.classification.isDeletedRecoveryResult
-    ? 'Verified deleted'
-    : 'Recoverable copy';
+    switch (resultKindFor(candidate)) {
+      RecoveryResultKind.verifiedDeleted => 'Verified deleted',
+      RecoveryResultKind.possibleRecoverable =>
+        'Possible copy, deletion not confirmed',
+      RecoveryResultKind.recoverableCopy => 'Recoverable copy',
+      RecoveryResultKind.cachedImage => 'Cached image, deletion not confirmed',
+      RecoveryResultKind.thumbnail =>
+        'Thumbnail copy, original quality unavailable',
+      RecoveryResultKind.existingPhoto => 'Existing photo',
+      RecoveryResultKind.unavailableOrCorrupt => 'Unavailable or invalid image',
+    };
 
 List<_SourceGroup> _sourceGroups(Iterable<MediaCandidate> candidates) {
   const order = [
     'Camera & Gallery',
     'Screenshots',
-    'Downloads / Saved',
-    'Messaging',
-    'App Media',
-    'Cache & Thumbnails',
-    'Hidden / Other',
+    'WhatsApp & Messaging',
+    'Downloads & Saved',
+    'Thumbnails & Cache',
+    'Hidden Images',
     'SD Card',
-    'Unknown',
+    'Other Recovery Images',
   ];
   final grouped = <String, List<MediaCandidate>>{};
   final seen = <String>{};
   for (final candidate in candidates) {
-    if (!seen.add(candidate.id)) continue;
-    final label = _sourceLabel(candidate);
-    (grouped[label] ??= []).add(candidate);
+    final identity =
+        candidate.contentUri?.toString() ??
+        candidate.documentUri?.toString() ??
+        candidate.filePath ??
+        candidate.id;
+    if (!seen.add(identity)) continue;
+    final key = _sourceLabel(candidate);
+    (grouped[key] ??= []).add(candidate);
   }
   return [
-    for (final label in order)
-      if (grouped[label] case final items?)
+    for (final key in order)
+      if (grouped[key] case final items?)
         _SourceGroup(
-          label: label,
+          label: key,
           verifiedDeleted: List.unmodifiable(
             items.where((item) => item.isDeletedRecoveryResult).toList(),
           ),
           possibleCopies: List.unmodifiable(
-            items.where((item) => !item.isDeletedRecoveryResult).toList(),
+            items
+                .where(
+                  (item) =>
+                      item.classification ==
+                      RecoveryClassification.possibleCopy,
+                )
+                .toList(),
           ),
         ),
   ];
@@ -922,19 +1209,25 @@ String _groupSummary(_SourceGroup group) {
 
 String _sourceLabel(MediaCandidate candidate) {
   if (candidate.discoveryEvidence.isCacheLike ||
-      candidate.discoveryEvidence.isThumbnailLike) {
-    return 'Cache & Thumbnails';
+      candidate.discoveryEvidence.isThumbnailLike ||
+      (candidate.relativeLocation ?? '').toLowerCase().contains(
+        '.thumbnails',
+      )) {
+    return 'Thumbnails & Cache';
   }
-  final location = candidate.relativeLocation?.toLowerCase() ?? '';
-  if (location.contains('android/media')) return 'App Media';
-  if (candidate.discoveryEvidence.isHidden) return 'Hidden / Other';
+  if (candidate.discoveryEvidence.isHidden ||
+      (candidate.relativeLocation ?? '')
+          .split('/')
+          .any((part) => part.startsWith('.'))) {
+    return 'Hidden Images';
+  }
   return switch (candidate.source) {
     MediaSource.cameraGallery => 'Camera & Gallery',
     MediaSource.screenshots => 'Screenshots',
-    MediaSource.downloadsSavedMedia => 'Downloads / Saved',
-    MediaSource.messagingSharedMedia => 'Messaging',
-    MediaSource.sdCard || MediaSource.customFolder => 'SD Card',
-    _ => 'Unknown',
+    MediaSource.downloadsSavedMedia => 'Downloads & Saved',
+    MediaSource.messagingSharedMedia => 'WhatsApp & Messaging',
+    MediaSource.sdCard => 'SD Card',
+    _ => 'Other Recovery Images',
   };
 }
 

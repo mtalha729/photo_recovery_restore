@@ -9,7 +9,9 @@ class ExistingMediaExclusionEngine {
     MediaCandidate candidate,
     ExistingMediaIndex index,
   ) {
-    final uriKey = ExistingMediaKeys.uri(candidate.contentUri);
+    final uriKey = ExistingMediaKeys.uri(
+      candidate.contentUri ?? candidate.documentUri,
+    );
     final uriMatches = uriKey == null ? null : index.findByUri(uriKey);
     if (uriMatches != null && uriMatches.isNotEmpty) {
       return ExistingMediaDecision.definitelyExisting(uriMatches.first);
@@ -57,12 +59,24 @@ class ExistingMediaExclusionEngine {
     );
     final compositeMatches = compositeKey == null
         ? null
-        : index.findByCompositeMetadata(compositeKey);
+        : index
+              .findByCompositeMetadata(compositeKey)
+              ?.where((reference) {
+                final candidateVolume = ExistingMediaKeys.lowerText(
+                  candidate.storageVolumeName,
+                );
+                final existingVolume = ExistingMediaKeys.lowerText(
+                  reference.metadata?.storageVolumeName ??
+                      reference.record.storageVolumeName,
+                );
+                return candidateVolume == null ||
+                    existingVolume == null ||
+                    candidateVolume == existingVolume;
+              })
+              .toList(growable: false);
     if (compositeMatches != null) {
       if (compositeMatches.length == 1) {
-        return ExistingMediaDecision.definitelyExisting(
-          compositeMatches.single,
-        );
+        return _exactMatchDecision(candidate, compositeMatches.single);
       }
       if (compositeMatches.isNotEmpty) {
         return const ExistingMediaDecision.uncertainIdentity();
@@ -73,6 +87,38 @@ class ExistingMediaExclusionEngine {
       return const ExistingMediaDecision.uncertainIdentity();
     }
     return const ExistingMediaDecision.noExistingMatch();
+  }
+
+  ExistingMediaDecision _exactMatchDecision(
+    MediaCandidate candidate,
+    ExistingMediaReference reference,
+  ) {
+    final evidence = candidate.discoveryEvidence;
+    final candidateLocation = ExistingMediaKeys.lowerText(candidate.relativeLocation);
+    final existingLocation = ExistingMediaKeys.lowerText(
+      reference.metadata?.relativePath ?? reference.record.relativePath,
+    );
+    final independentlyInspectedArtifact =
+        (candidate.filePath != null || candidate.contentUri != null) &&
+        evidence.detectedFormat != null &&
+        candidateLocation != null &&
+        existingLocation != null &&
+        candidateLocation != existingLocation &&
+        (evidence.isCacheLike ||
+            evidence.isThumbnailLike ||
+            evidence.isTrashLike) &&
+        ExistingMediaKeys.isRecoveryArtifactLocation(
+          candidate.relativeLocation ?? candidate.bucketName,
+        ) &&
+        ExistingMediaKeys.isRecoveryArtifactLocation(
+          reference.metadata?.relativePath ??
+              reference.record.relativePath ??
+              reference.metadata?.bucketName ??
+              reference.record.bucketName,
+        );
+    return independentlyInspectedArtifact
+        ? const ExistingMediaDecision.noExistingMatch()
+        : ExistingMediaDecision.definitelyExisting(reference);
   }
 
   bool _hasWeakOverlap(MediaCandidate candidate, ExistingMediaIndex index) {

@@ -25,6 +25,7 @@ enum BestCopySelectionCategory {
   protectedOriginal,
   alternateFullQuality,
   lowerResolution,
+  unknownQuality,
   metadataOnly,
   unusable,
 }

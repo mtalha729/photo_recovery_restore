@@ -1,0 +1,4 @@
+# Copy this file to local.properties before opening android/ in Android Studio.
+# Use your own installed SDK locations. Keep local.properties out of source ZIPs.
+sdk.dir=C:\\path\\to\\Android\\Sdk
+flutter.sdk=C:\\path\\to\\flutter

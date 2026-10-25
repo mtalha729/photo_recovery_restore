@@ -7,8 +7,7 @@ void main() {
   Widget home() => MaterialApp(
     theme: AppTheme.light,
     home: HomeScreen(
-      onRecoverPhotos: () {},
-      onDeepPhotoRecovery: () {},
+      onStartPhotoRecovery: () {},
       onManageShield: () {},
       onRecoveredPhotos: () {},
       onSettings: () {},
@@ -18,16 +17,17 @@ void main() {
     ),
   );
 
-  testWidgets('Home presents one source-agnostic photo recovery entry', (
+  testWidgets('Home presents one photo recovery entry and recovery history', (
     tester,
   ) async {
     await tester.pumpWidget(home());
     expect(find.text('Storage details'), findsOneWidget);
     expect(find.text('Recover Photos'), findsOneWidget);
+    expect(find.text('Deep Photo Recovery'), findsNothing);
     expect(find.text('Recover Videos'), findsNothing);
     expect(find.text('Recover Files'), findsNothing);
     expect(find.text('Recover Audio'), findsNothing);
-    expect(find.textContaining('Recovered'), findsOneWidget);
+    expect(find.text('Recovered Photos'), findsOneWidget);
     expect(find.text('Recovery Shield'), findsOneWidget);
     expect(find.text('Deep Recovery'), findsNothing);
     expect(find.text('Camera & Gallery'), findsNothing);
@@ -50,7 +50,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Home uses one focused recovery action on a standard phone', (
+  testWidgets('Home exposes a shared photo recovery action on a standard phone', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 900));
@@ -61,7 +61,34 @@ void main() {
     expect(find.bySemanticsLabel('Recover Photos'), findsOneWidget);
   });
 
-  testWidgets('Recover Photos and Recovered Photos share one horizontal row', (
+  testWidgets('the single Recover Photos entry starts recovery', (
+    tester,
+  ) async {
+    var starts = 0;
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: HomeScreen(
+          onStartPhotoRecovery: () => starts++,
+          onManageShield: () {},
+          onRecoveredPhotos: () {},
+          onSettings: () {},
+          onDuplicatePhotos: () {},
+          onOldPhotos: () {},
+          onLargePhotos: () {},
+        ),
+      ),
+    );
+
+    final recoverPhotos = find.text('Recover Photos');
+    expect(recoverPhotos, findsOneWidget);
+    await tester.tap(recoverPhotos);
+    expect(starts, 1);
+  });
+
+  testWidgets('Recover Photos is primary and history remains separate', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 800));
@@ -72,14 +99,14 @@ void main() {
     final recoveredPhotos = find.byKey(const ValueKey('recovered-photos-card'));
     expect(recoverPhotos, findsOneWidget);
     expect(recoveredPhotos, findsOneWidget);
-    expect(tester.getCenter(recoveredPhotos).dx, greaterThan(tester.getCenter(recoverPhotos).dx));
     expect(
-      (tester.getCenter(recoveredPhotos).dy - tester.getCenter(recoverPhotos).dy).abs(),
-      lessThan(1),
+      tester.getCenter(recoveredPhotos).dy,
+      greaterThan(tester.getCenter(recoverPhotos).dy),
     );
-    expect(tester.getSize(recoveredPhotos).height, tester.getSize(recoverPhotos).height);
+    expect(tester.getSize(recoverPhotos).height, greaterThan(0));
   });
-  testWidgets('Home keeps its focused action at narrow widths', (tester) async {
+
+  testWidgets('Home keeps recovery actions usable at narrow widths', (tester) async {
     await tester.binding.setSurfaceSize(const Size(320, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(home());
@@ -96,7 +123,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       theme: AppTheme.light,
       home: HomeScreen(
-        onRecoverPhotos: () {}, onDeepPhotoRecovery: () {}, onManageShield: () {},
+        onStartPhotoRecovery: () {}, onManageShield: () {},
         onRecoveredPhotos: () {}, onSettings: () {},
         onDuplicatePhotos: () => duplicate++, onOldPhotos: () => old++, onLargePhotos: () => large++,
       ),

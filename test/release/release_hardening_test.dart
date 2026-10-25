@@ -3,12 +3,28 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('release configuration avoids debug signing and enables shrinking', () {
+  test('release configuration keeps ARM-only optimized AAB hardening', () {
     final buildFile = File('android/app/build.gradle.kts').readAsStringSync();
 
-    expect(buildFile, contains('compileSdk = flutter.compileSdkVersion'));
+    expect(buildFile, contains('compileSdk = maxOf(flutter.compileSdkVersion, 36)'));
     expect(buildFile, contains('minSdk = 26'));
-    expect(buildFile, contains('targetSdk = flutter.targetSdkVersion'));
+    // Flutter supplies release ABI filters; do not add an explicit NDK filter.
+    expect(
+      buildFile,
+      isNot(matches(RegExp(r'ndk\s*\{[^}]*abiFilters', dotAll: true))),
+    );
+    expect(buildFile, isNot(contains('"x86"')));
+    expect(buildFile, isNot(contains('"x86_64"')));
+    expect(
+      buildFile,
+      matches(
+        RegExp(
+          r'bundle\s*\{\s*abi\s*\{\s*enableSplit\s*=\s*true\s*\}\s*density\s*\{\s*enableSplit\s*=\s*true\s*\}\s*\}',
+          dotAll: true,
+        ),
+      ),
+    );
+    expect(buildFile, contains('targetSdk = maxOf(flutter.targetSdkVersion, 36)'));
     expect(buildFile, contains('namespace = "com.photorecoveryrestore.app"'));
     expect(
       buildFile,
@@ -19,6 +35,55 @@ void main() {
     expect(buildFile, contains('isMinifyEnabled = true'));
     expect(buildFile, contains('isShrinkResources = true'));
     expect(buildFile, isNot(contains('signingConfigs.getByName("debug")')));
+  });
+
+  test(
+    'local APK ABI splits use Flutter instead of conflicting static filters',
+    () {
+      final buildFile = File('android/app/build.gradle.kts').readAsStringSync();
+      final readme = File('README.md').readAsStringSync();
+
+      expect(
+        buildFile,
+        isNot(matches(RegExp(r'ndk\s*\{[^}]*abiFilters', dotAll: true))),
+      );
+      expect(
+        buildFile,
+        isNot(matches(RegExp(r'splits\s*\{\s*abi\b', dotAll: true))),
+      );
+      expect(
+        readme,
+        contains(
+          'flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64',
+        ),
+      );
+    },
+  );
+
+  test('AGP 9 uses a Flutter-compatible Kotlin plugin and Gradle 9', () {
+    final settings = File('android/settings.gradle.kts').readAsStringSync();
+    final appBuild = File('android/app/build.gradle.kts').readAsStringSync();
+    final gradleProperties = File(
+      'android/gradle.properties',
+    ).readAsStringSync();
+    final wrapper = File(
+      'android/gradle/wrapper/gradle-wrapper.properties',
+    ).readAsStringSync();
+
+    expect(
+      settings,
+      contains('id("com.android.application") version "9.1.1" apply false'),
+    );
+    expect(
+      settings,
+      contains(
+        'id("org.jetbrains.kotlin.android") version "2.4.0" apply false',
+      ),
+    );
+    expect(appBuild, contains('id("org.jetbrains.kotlin.android")'));
+    expect(gradleProperties, contains('android.builtInKotlin=false'));
+    expect(gradleProperties, contains('android.newDsl=false'));
+    expect(wrapper, contains('gradle-9.3.1-bin.zip'));
   });
 
   test(
@@ -104,12 +169,27 @@ void main() {
       'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
       'BoundedThumbnailLoader.kt',
     ).readAsStringSync();
+    final decoder = File(
+      'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+      'BoundedFileThumbnailDecoder.kt',
+    ).readAsStringSync();
+    final inspector = File(
+      'android/app/src/main/kotlin/com/photorecoveryrestore/app/'
+      'ImageSignatureInspector.kt',
+    ).readAsStringSync();
 
     expect(loader, contains('coerceIn(1, 512)'));
     expect(loader, contains('resolver.loadThumbnail'));
     expect(loader, contains('MediaStore.Images.Thumbnails.getThumbnail'));
     expect(loader, isNot(contains('BitmapFactory')));
     expect(loader, isNot(contains('openInputStream')));
+    expect(decoder, contains('inJustDecodeBounds = true'));
+    expect(decoder, contains('inSampleSize = sample'));
+    expect(inspector, contains('inJustDecodeBounds = true'));
+    expect(
+      inspector,
+      contains('BitmapFactory.decodeStream(stream, null, options)'),
+    );
   });
 
   test(

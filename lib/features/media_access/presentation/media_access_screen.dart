@@ -25,8 +25,20 @@ class _MediaAccessScreenState extends State<MediaAccessScreen> {
   bool _hasRequested = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Recover Photos was an explicit user action, so open Android's runtime
+    // permission dialog without requiring another redundant tap in this UI.
+    if (_state.status == MediaAccessStatus.denied) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _request(MediaAccessRequestIntent.fullAccess);
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Photo access')),
+    appBar: AppBar(title: const Text('Storage Access')),
     body: SafeArea(
       child: ResponsiveContent(
         child: SingleChildScrollView(
@@ -49,22 +61,15 @@ class _MediaAccessScreenState extends State<MediaAccessScreen> {
                 const SizedBox(height: AppSpacing.lg),
                 if (_state.isLimited) ...[
                   AppPrimaryButton(
-                    label: 'Continue with limited access',
-                    onPressed: () => widget.onAccessAvailable(_state),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  AppSecondaryButton(
-                    label: 'Choose or change allowed photos',
-                    onPressed: () => _request(
-                      MediaAccessRequestIntent.changeSelectedPhotos,
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  TextButton(
+                    label: 'Grant Access',
                     onPressed: _requesting
                         ? null
                         : () => _request(MediaAccessRequestIntent.fullAccess),
-                    child: const Text('Request full photo access'),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  AppSecondaryButton(
+                    label: 'Continue with selected photos',
+                    onPressed: () => widget.onAccessAvailable(_state),
                   ),
                 ] else if (_state.status ==
                     MediaAccessStatus.settingsRequired) ...[
@@ -85,7 +90,7 @@ class _MediaAccessScreenState extends State<MediaAccessScreen> {
                         : _hasRequested &&
                               _state.status == MediaAccessStatus.denied
                         ? 'Try again'
-                        : 'Continue',
+                        : 'Grant Access',
                     onPressed: _requesting
                         ? null
                         : () => _request(MediaAccessRequestIntent.initial),
@@ -105,17 +110,17 @@ class _MediaAccessScreenState extends State<MediaAccessScreen> {
   );
 
   String get _title => switch (_state.status) {
-    MediaAccessStatus.limitedSelectedAccess => 'Limited photo access',
-    MediaAccessStatus.settingsRequired => 'Allow access in Settings',
-    MediaAccessStatus.denied => 'Photo access was not granted',
+    MediaAccessStatus.limitedSelectedAccess => 'Selected photos only',
+    MediaAccessStatus.settingsRequired => 'Allow storage access in Settings',
+    MediaAccessStatus.denied => 'Storage access was not granted',
     MediaAccessStatus.unsupported ||
     MediaAccessStatus.unknown => 'Photo access unavailable',
-    _ => 'Allow photo access',
+    _ => 'Storage Access',
   };
 
   String get _message => _state.isLimited
-      ? 'Recovery can scan only the photos Android currently allows this app to access. This is not a full-library scan.'
-      : 'Photo access lets recovery compare current media with verified deleted candidates, so existing photos are excluded. Processing stays on this device.';
+      ? 'Android granted access to selected photos only. Request full photo access to scan the complete photo library; this app cannot change that choice without your approval.'
+      : 'Allow access to photos and available device storage so Photo Recovery & Restore can search for recoverable images.';
 
   Future<void> _request(MediaAccessRequestIntent intent) async {
     setState(() => _requesting = true);
@@ -126,7 +131,7 @@ class _MediaAccessScreenState extends State<MediaAccessScreen> {
       _requesting = false;
       _hasRequested = true;
     });
-    if (state.canReadImages && !state.isLimited) {
+    if (state.canReadImages) {
       widget.onAccessAvailable(state);
     }
   }

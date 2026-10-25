@@ -98,6 +98,10 @@ void main() {
           final arguments = call.arguments as Map;
           expect(arguments['expectedByteSize'], 4);
           expect(arguments['sha256Digest'], 'abcd');
+          expect(
+            arguments['originalContentUri'],
+            'content://media/external/images/media/1',
+          );
           return {
             'status': 'restored',
             'restoredContentUri': 'content://media/item/9',
@@ -241,13 +245,9 @@ void main() {
     );
   });
 
-  test('SD and custom sources require an active destination scope', () {
+  test('SD-card sources require an active destination scope', () {
     expect(
       prepare(source: MediaSource.sdCard).rejection?.status,
-      RecoveryShieldRestoreStatus.destinationRequired,
-    );
-    expect(
-      prepare(source: MediaSource.customFolder).rejection?.status,
       RecoveryShieldRestoreStatus.destinationRequired,
     );
     final scope = AuthorizedFolderScope(

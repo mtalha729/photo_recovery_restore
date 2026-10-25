@@ -3,18 +3,25 @@ import '../../domain/recovery_classification.dart';
 import '../media_metadata/current_media_metadata.dart';
 
 class VerifiedTrashItem {
-  VerifiedTrashItem._({required this.metadata})
-    : deletionEvidence = DeletionEvidence(
-        reasons: const [DeletionEvidenceReason.systemTrashRecord],
-      );
+  VerifiedTrashItem._({
+    required this.metadata,
+    required this.initialBytesReadable,
+  }) : deletionEvidence = DeletionEvidence(
+         reasons: const [DeletionEvidenceReason.systemTrashRecord],
+       );
 
   factory VerifiedTrashItem.fromPlatformTrash({
     required CurrentMediaMetadata metadata,
+    bool initialBytesReadable = true,
   }) {
-    return VerifiedTrashItem._(metadata: metadata);
+    return VerifiedTrashItem._(
+      metadata: metadata,
+      initialBytesReadable: initialBytesReadable,
+    );
   }
 
   final CurrentMediaMetadata metadata;
+  final bool initialBytesReadable;
   final DeletionEvidence deletionEvidence;
 
   RecoveryClassification get classification =>
@@ -40,6 +47,9 @@ class TrashDiscoveryPage {
     this.nextAfterMediaStoreId,
     this.nextContinuationToken,
     this.scannedVolumeName,
+    this.invalidFilesRejected = 0,
+    this.inaccessibleFiles = 0,
+    this.rawRowsExamined = 0,
   });
 
   const TrashDiscoveryPage.empty() : this(items: const []);
@@ -48,6 +58,9 @@ class TrashDiscoveryPage {
   final int? nextAfterMediaStoreId;
   final String? nextContinuationToken;
   final String? scannedVolumeName;
+  final int invalidFilesRejected;
+  final int inaccessibleFiles;
+  final int rawRowsExamined;
 
   bool get mayHaveMore =>
       nextContinuationToken != null || nextAfterMediaStoreId != null;

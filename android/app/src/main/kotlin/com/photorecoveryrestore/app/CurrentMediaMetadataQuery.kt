@@ -46,10 +46,14 @@ class CurrentMediaMetadataQuery(private val contentResolver: ContentResolver) {
                         "dateTakenMillis" to cursor.getLongOrNull(MediaStore.Images.Media.DATE_TAKEN),
                         "dateAddedSeconds" to cursor.getLongOrNull(MediaStore.Images.Media.DATE_ADDED),
                         "dateModifiedSeconds" to cursor.getLongOrNull(MediaStore.Images.Media.DATE_MODIFIED),
-                        "relativePath" to cursor.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH),
+                        "relativePath" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            cursor.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH)
+                        } else null,
                         "bucketName" to cursor.getStringOrNull(MediaStore.Images.Media.BUCKET_DISPLAY_NAME),
                         "orientationDegrees" to cursor.getIntOrNull(MediaStore.Images.Media.ORIENTATION),
-                        "storageVolumeName" to cursor.getStringOrNull(MediaStore.MediaColumns.VOLUME_NAME),
+                        "storageVolumeName" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            cursor.getStringOrNull(MediaStore.MediaColumns.VOLUME_NAME)
+                        } else storageVolumeName,
                     ),
                 )
             } ?: unavailable()

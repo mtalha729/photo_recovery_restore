@@ -12,14 +12,12 @@ enum DeepRecoveryProviderKind {
   thumbnailCache,
   messagingSharedMedia,
   oemAccessibleTrash,
-  authorizedSafTree,
   removableSharedVolume,
   recoveryShield,
 }
 
 enum DeepStorageAccessCapability {
   mediaStore,
-  persistedSafTree,
   legacySharedRead,
   advancedSharedTraversal,
 }
@@ -62,17 +60,15 @@ class DeepRecoveryProviderRequest {
     required this.source,
     this.profile = PhotoRecoveryProfile.fastDeep,
     this.continuationToken,
-    this.currentMediaLocationKeys = const {},
+    this.existingStorageLocationKeys = const {},
   }) : assert(pageSize > 0 && pageSize <= 200);
 
   final int pageSize;
   final MediaSource source;
   final PhotoRecoveryProfile profile;
   final String? continuationToken;
+  final Set<String> existingStorageLocationKeys;
 
-  /// Passed only when a native direct-storage session is created. These are
-  /// exact identities, not filename-only matches.
-  final Set<String> currentMediaLocationKeys;
 }
 
 sealed class DeepRecoveryProviderResult {
@@ -93,8 +89,11 @@ class DeepRecoveryProviderPage extends DeepRecoveryProviderResult {
     this.carvedTempBytesReclaimed = 0,
     this.invalidFilesRejected = 0,
     this.unavailableFiles = 0,
+    this.unavailableDirectories = 0,
     this.unsupportedFiles = 0,
     this.directoriesExamined = 0,
+    this.rootDirectoriesOpened = 0,
+    this.signatureFilesInspected = 0,
     this.directoryWorkConsumed = 0,
     this.candidatesFound = 0,
     this.volumesScanned = const {},
@@ -119,8 +118,11 @@ class DeepRecoveryProviderPage extends DeepRecoveryProviderResult {
   final int carvedTempBytesReclaimed;
   final int invalidFilesRejected;
   final int unavailableFiles;
+  final int unavailableDirectories;
   final int unsupportedFiles;
   final int directoriesExamined;
+  final int rootDirectoriesOpened;
+  final int signatureFilesInspected;
   final int directoryWorkConsumed;
   final int candidatesFound;
   final Set<String> volumesScanned;
@@ -147,6 +149,9 @@ abstract interface class DeepRecoveryDiscoveryProvider {
   Future<DeepRecoveryProviderResult> getPage(
     DeepRecoveryProviderRequest request,
   );
+
+  /// Cancels native or provider-owned work; providers without such work no-op.
+  Future<void> cancelActiveScan();
 }
 
 /// Boundary for any future Play-reviewed storage capability. V2 never silently

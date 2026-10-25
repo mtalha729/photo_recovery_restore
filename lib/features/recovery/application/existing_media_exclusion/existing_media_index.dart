@@ -19,22 +19,25 @@ class ExistingMediaIndex {
     Iterable<CurrentMediaMetadata> metadata = const [],
   }) {
     final recordList = records.toList(growable: false);
-    final combinedMetadata = <CurrentMediaMetadata>[
-      ...metadata,
-      ...recordList.map(_metadataFromInventoryRecord),
-    ];
-    final metadataByUri = <String, CurrentMediaMetadata>{};
-    final metadataByPlatformIdentity = <String, CurrentMediaMetadata>{};
     final metadataById = <int, List<CurrentMediaMetadata>>{};
-    for (final value in combinedMetadata) {
+    for (final value in metadata) {
       (metadataById[value.mediaStoreId] ??= []).add(value);
-      final uriKey = ExistingMediaKeys.uri(value.contentUri);
-      if (uriKey != null) metadataByUri[uriKey] = value;
-      final platformKey = ExistingMediaKeys.platformIdentity(
-        mediaStoreId: value.mediaStoreId,
-        storageVolumeName: value.storageVolumeName,
-      );
-      if (platformKey != null) metadataByPlatformIdentity[platformKey] = value;
+    }
+    final seenRecordIds = <int>{};
+    final repeatedRecordIds = <int>{};
+    for (final record in recordList) {
+      if (!seenRecordIds.add(record.mediaStoreId)) {
+        repeatedRecordIds.add(record.mediaStoreId);
+      }
+    }
+    // Unique inventory records are their own metadata fallback. Materialize
+    // additional metadata only when explicit or duplicate IDs need comparison.
+    for (final record in recordList) {
+      final id = record.mediaStoreId;
+      if (!metadataById.containsKey(id) && !repeatedRecordIds.contains(id)) {
+        continue;
+      }
+      (metadataById[id] ??= []).add(_metadataFromInventoryRecord(record));
     }
     final uniqueReferences = <String, ExistingMediaReference>{};
 
@@ -88,9 +91,9 @@ class ExistingMediaIndex {
         ExistingMediaKeys.storageLocation(
           storageVolumeName:
               metadataValue?.storageVolumeName ?? record.storageVolumeName,
-          relativeLocation: metadataValue?.relativePath,
+          relativeLocation: metadataValue?.relativePath ?? record.relativePath,
           displayName: metadataValue?.displayName ?? record.displayName,
-          byteSize: metadataValue?.byteSize,
+          byteSize: metadataValue?.byteSize ?? record.byteSize,
         ),
         reference,
       );
@@ -99,11 +102,11 @@ class ExistingMediaIndex {
         ExistingMediaKeys.compositeMetadata(
           displayName: metadataValue?.displayName ?? record.displayName,
           mimeType: metadataValue?.mimeType ?? record.mimeType,
-          byteSize: metadataValue?.byteSize,
-          width: metadataValue?.width,
-          height: metadataValue?.height,
-          relativeLocation: metadataValue?.relativePath,
-          bucketName: metadataValue?.bucketName,
+          byteSize: metadataValue?.byteSize ?? record.byteSize,
+          width: metadataValue?.width ?? record.width,
+          height: metadataValue?.height ?? record.height,
+          relativeLocation: metadataValue?.relativePath ?? record.relativePath,
+          bucketName: metadataValue?.bucketName ?? record.bucketName,
         ),
         reference,
       );
@@ -113,14 +116,14 @@ class ExistingMediaIndex {
       );
       if (fileName != null) fileNames.add(fileName);
       final dimensionKey = ExistingMediaKeys.dimensions(
-        metadataValue?.width,
-        metadataValue?.height,
+        metadataValue?.width ?? record.width,
+        metadataValue?.height ?? record.height,
       );
       if (dimensionKey != null) dimensions.add(dimensionKey);
       for (final timestamp in [
-        metadataValue?.dateTaken,
-        metadataValue?.dateModified,
-        metadataValue?.dateAdded,
+        metadataValue?.dateTaken ?? record.dateTaken,
+        metadataValue?.dateModified ?? record.dateModified,
+        metadataValue?.dateAdded ?? record.dateAdded,
       ]) {
         if (timestamp != null) timestamps.add(timestamp.millisecondsSinceEpoch);
       }
@@ -167,11 +170,31 @@ class ExistingMediaIndex {
     CurrentMediaRecord record,
     List<CurrentMediaMetadata> values,
   ) {
-    if (values.isEmpty) return null;
-    if (values.length == 1) return values.single;
+    final compatible = values
+        .where((value) {
+          final recordUri = ExistingMediaKeys.uri(record.contentUri);
+          final metadataUri = ExistingMediaKeys.uri(value.contentUri);
+          if (recordUri != null &&
+              metadataUri != null &&
+              recordUri != metadataUri) {
+            return false;
+          }
+          final recordVolume = ExistingMediaKeys.lowerText(
+            record.storageVolumeName,
+          );
+          final metadataVolume = ExistingMediaKeys.lowerText(
+            value.storageVolumeName,
+          );
+          return recordVolume == null ||
+              metadataVolume == null ||
+              recordVolume == metadataVolume;
+        })
+        .toList(growable: false);
+    if (compatible.isEmpty) return null;
+    if (compatible.length == 1) return compatible.single;
 
     final scored =
-        values
+        compatible
             .map(
               (value) => (value: value, score: _metadataScore(value, record)),
             )
@@ -250,6 +273,21 @@ class ExistingMediaIndex {
   Set<String> get storageLocationKeys =>
       Set.unmodifiable(_byStorageLocation.keys);
 
+  /// Native traversal can skip exact ordinary originals, but must inspect
+  /// indexed files in recovery-relevant cache, thumbnail, and trash folders.
+  Set<String> get ordinaryStorageLocationKeys => Set.unmodifiable(
+    _byStorageLocation.entries
+        .where(
+          (entry) => entry.value.any(
+            (reference) => !ExistingMediaKeys.isRecoveryArtifactLocation(
+              reference.metadata?.relativePath ?? reference.record.relativePath,
+            ),
+          ),
+        )
+        .map((entry) => entry.key)
+        .toSet(),
+  );
+
   static void _add(
     Map<String, List<ExistingMediaReference>> index,
     String? key,
@@ -261,6 +299,29 @@ class ExistingMediaIndex {
 
 class ExistingMediaKeys {
   const ExistingMediaKeys._();
+
+  static bool isRecoveryArtifactLocation(String? value) {
+    final location = normalizedLocation(value);
+    if (location == null) return false;
+    final segments = location.split('/');
+    return segments.any(
+      (segment) =>
+          segment == '.thumbnails' ||
+          segment == 'thumbnails' ||
+          segment == 'thumbnail' ||
+          segment == 'thumbcache' ||
+          segment == '.cache' ||
+          segment == 'cache' ||
+          segment == '.preview' ||
+          segment == 'preview' ||
+          segment == '.previews' ||
+          segment == 'previews' ||
+          segment == '.trash' ||
+          segment.startsWith('.trashed-') ||
+          segment == '.recycle' ||
+          segment == 'recyclebin',
+    );
+  }
 
   static String? uri(Uri? value) {
     return text(value?.toString());
@@ -339,7 +400,8 @@ class ExistingMediaKeys {
         ?.replaceAll('\\', '/')
         .replaceAll(RegExp(r'/+'), '/')
         .replaceFirst(RegExp(r'^/+'), '')
-        .replaceFirst(RegExp(r'/+$'), '');
+        .replaceFirst(RegExp(r'/+$'), '')
+        .toLowerCase();
     return normalized == null || normalized.isEmpty ? null : normalized;
   }
 }

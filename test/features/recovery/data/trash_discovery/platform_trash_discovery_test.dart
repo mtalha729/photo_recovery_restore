@@ -105,6 +105,23 @@ void main() {
     expect(RecoveryClassification.possibleCopy.isVerifiedDeleted, isFalse);
   });
 
+  test('byte-validation rejection diagnostics are preserved', () {
+    final result = TrashDiscoveryPlatformMapper.fromResponse({
+      'status': 'success',
+      'items': <Object?>[],
+      'nextContinuationToken': 'mv1:0:199',
+      'invalidFilesRejected': 3,
+      'inaccessibleFiles': 2,
+      'rawRowsExamined': 5,
+    });
+
+    final page = (result as TrashDiscoverySuccess).page;
+    expect(page.invalidFilesRejected, 3);
+    expect(page.inaccessibleFiles, 2);
+    expect(page.rawRowsExamined, 5);
+    expect(page.nextContinuationToken, 'mv1:0:199');
+  });
+
   test('pagination continuation is preserved', () {
     final result = TrashDiscoveryPlatformMapper.fromResponse({
       'status': 'success',

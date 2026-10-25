@@ -78,8 +78,9 @@ class PlatformRecoveryShieldRestorer implements RecoveryShieldRestorer {
       final status = _status(raw['status']);
       final uriText = raw['restoredContentUri'];
       final uri = uriText is String ? Uri.tryParse(uriText) : null;
-      if (status == RecoveryShieldRestoreStatus.restored && uri == null) {
-        return _failure(request, 'Missing restored media URI.');
+      if (status == RecoveryShieldRestoreStatus.restored &&
+          (uri == null || uri.scheme != 'content')) {
+        return _failure(request, 'Missing restored content URI.');
       }
       return RecoveryShieldRestoreResult(
         protectionId: request.record.protectionId,
@@ -112,6 +113,7 @@ class PlatformRecoveryShieldRestorer implements RecoveryShieldRestorer {
       'protectedCopyLocation': record.protectedCopyLocation,
       'sha256Digest': record.sha256Digest,
       'expectedByteSize': record.byteSize,
+      'originalContentUri': record.originalContentUri?.toString(),
       'displayName': record.displayName,
       'mimeType': record.mimeType,
       'dateTakenMillis': record.takenAt?.millisecondsSinceEpoch,

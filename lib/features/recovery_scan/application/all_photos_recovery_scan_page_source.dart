@@ -94,6 +94,14 @@ class AllPhotosRecoveryScanPageSource
   }
 
   @override
+  bool get canRequestDeepStorageAccess => _sources.any(
+    (source) =>
+        source is DeepScanCapabilityAwarePageSource &&
+        (source as DeepScanCapabilityAwarePageSource)
+            .canRequestDeepStorageAccess,
+  );
+
+  @override
   Future<void> openDeepScanSettings() async {
     for (final source in _sources) {
       if (source is DeepScanCapabilityAwarePageSource) {

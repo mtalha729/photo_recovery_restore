@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/deletion_evidence.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/media_candidate.dart';
+import 'package:photo_recovery_restore/features/recovery/domain/recovery_discovery_evidence.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/media_source.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_classification.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_quality.dart';
@@ -10,15 +11,18 @@ void main() {
   MediaCandidate candidate({
     required RecoveryClassification classification,
     RestoreCapability restoreCapability = RestoreCapability.notRestorable,
-    DeletionEvidence? deletionEvidence,
+    bool isRecoveryShieldBackup = false,
   }) {
     return MediaCandidate(
       id: 'candidate-1',
       source: MediaSource.unknown,
       classification: classification,
-      deletionEvidence: deletionEvidence ?? DeletionEvidence(),
+      deletionEvidence: DeletionEvidence(),
       restoreCapability: restoreCapability,
       recoveryQuality: RecoveryQuality.unavailable,
+      discoveryEvidence: RecoveryDiscoveryEvidence(
+        isRecoveryShieldBackup: isRecoveryShieldBackup,
+      ),
     );
   }
 
@@ -41,19 +45,16 @@ void main() {
       expect(possibleCopy.isDeletedRecoveryResult, isFalse);
     });
 
-    test('protected deletion is distinct from verified system deletion', () {
+    test('Recovery Shield backups are not deletion evidence', () {
       final protected = candidate(
-        classification: RecoveryClassification.protectedDeleted,
-        deletionEvidence: DeletionEvidence(
-          reasons: [DeletionEvidenceReason.recoveryShieldRecord],
-        ),
+        classification: RecoveryClassification.protectedCopy,
+        isRecoveryShieldBackup: true,
       );
 
       expect(protected.isVerifiedDeleted, isFalse);
-      expect(protected.isDeletedRecoveryResult, isTrue);
-      expect(protected.deletionEvidence.reasons, {
-        DeletionEvidenceReason.recoveryShieldRecord,
-      });
+      expect(protected.isDeletedRecoveryResult, isFalse);
+      expect(protected.deletionEvidence.isEmpty, isTrue);
+      expect(protected.discoveryEvidence.isRecoveryShieldBackup, isTrue);
     });
   });
 

@@ -14,6 +14,9 @@ class CurrentMediaRecord {
     this.relativePath,
     this.bucketName,
     this.orientationDegrees,
+    this.recoveryArtifactFormat,
+    this.isThumbnailArtifact = false,
+    this.isCacheArtifact = false,
   });
 
   final int mediaStoreId;
@@ -30,6 +33,9 @@ class CurrentMediaRecord {
   final String? relativePath;
   final String? bucketName;
   final int? orientationDegrees;
+  final String? recoveryArtifactFormat;
+  final bool isThumbnailArtifact;
+  final bool isCacheArtifact;
 }
 
 class CurrentMediaPageRequest {

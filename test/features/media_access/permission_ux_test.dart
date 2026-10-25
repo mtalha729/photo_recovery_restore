@@ -42,20 +42,24 @@ void main() {
     expect(find.text('Storage details'), findsOneWidget);
   });
 
-  testWidgets('Not now does not request permission', (tester) async {
-    final coordinator = _Coordinator(MediaAccessStatus.denied);
-    await tester.pumpWidget(_accessApp(coordinator));
-    await tester.tap(find.text('Not now'));
-    await tester.pumpAndSettle();
-    expect(coordinator.requestCalls, 0);
-  });
+  testWidgets(
+    'Not now dismisses a permission route after its initial request',
+    (tester) async {
+      final coordinator = _Coordinator(MediaAccessStatus.denied);
+      await tester.pumpWidget(_accessApp(coordinator));
+      await tester.pump();
+      await tester.tap(find.text('Not now'));
+      await tester.pumpAndSettle();
+      expect(coordinator.requestCalls, 1);
+    },
+  );
 
-  testWidgets('rationale appears before explicit request', (tester) async {
+  testWidgets('permission request begins after Recover Photos opens access', (
+    tester,
+  ) async {
     final coordinator = _Coordinator(MediaAccessStatus.denied);
     await tester.pumpWidget(_accessApp(coordinator));
-    expect(find.textContaining('compare current media'), findsOneWidget);
-    expect(coordinator.requestCalls, 0);
-    await tester.tap(find.text('Continue'));
+    expect(find.textContaining('available device storage'), findsOneWidget);
     await tester.pump();
     expect(coordinator.requestCalls, 1);
   });
@@ -75,27 +79,15 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Limited photo access'), findsOneWidget);
-    expect(find.textContaining('not a full-library scan'), findsOneWidget);
+    expect(find.text('Selected photos only'), findsOneWidget);
+    expect(find.textContaining('complete photo library'), findsOneWidget);
     expect(find.textContaining('All photos scanned'), findsNothing);
-    expect(find.text('Request full photo access'), findsOneWidget);
-    await tester.tap(find.text('Choose or change allowed photos'));
-    await tester.pump();
-    expect(coordinator.requestIntents, [
-      MediaAccessRequestIntent.changeSelectedPhotos,
-    ]);
-    await tester.tap(find.text('Continue with limited access'));
-    expect(continued, isTrue);
-  });
-
-  testWidgets('limited access offers a distinct full-access upgrade', (
-    tester,
-  ) async {
-    final coordinator = _Coordinator(MediaAccessStatus.limitedSelectedAccess);
-    await tester.pumpWidget(_accessApp(coordinator));
-    await tester.tap(find.text('Request full photo access'));
+    expect(find.text('Grant Access'), findsOneWidget);
+    await tester.tap(find.text('Grant Access'));
     await tester.pump();
     expect(coordinator.requestIntents, [MediaAccessRequestIntent.fullAccess]);
+    await tester.tap(find.text('Continue with selected photos'));
+    expect(continued, isTrue);
   });
 
   testWidgets('unsupported state never offers a permission request', (
@@ -149,11 +141,31 @@ void main() {
     await tester.tap(find.text('Recover Photos'));
     await tester.pumpAndSettle();
     expect(coordinator.getCalls, 1);
-    expect(coordinator.requestCalls, 0);
-    expect(find.text('Photo access'), findsOneWidget);
+    expect(coordinator.requestCalls, 1);
+    expect(find.text('Storage Access'), findsOneWidget);
   });
 
-  testWidgets('permission state is rechecked for each recovery intent', (
+  testWidgets('denied library access does not offer a folder-only scan', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final coordinator = _Coordinator(MediaAccessStatus.denied);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: PhotoRecoveryAppShell(accessCoordinator: coordinator),
+      ),
+    );
+    await tester.tap(find.text('Recover Photos'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scan a folder you choose'), findsNothing);
+    expect(coordinator.getCalls, 1);
+    expect(coordinator.requestCalls, 1);
+  });
+
+  testWidgets('the single Recover Photos entry opens the permission route', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 800));
@@ -165,13 +177,11 @@ void main() {
         home: PhotoRecoveryAppShell(accessCoordinator: coordinator),
       ),
     );
+    expect(find.text('Deep Photo Recovery'), findsNothing);
     await tester.tap(find.text('Recover Photos'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Not now'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Recover Photos'));
-    await tester.pumpAndSettle();
-    expect(coordinator.getCalls, 2);
+    expect(coordinator.getCalls, 1);
+    expect(find.text('Storage Access'), findsOneWidget);
   });
 
   testWidgets('full access routes to scan without another permission request', (
@@ -191,6 +201,29 @@ void main() {
     expect(find.text('Recover Photos'), findsOneWidget);
     expect(coordinator.requestCalls, 0);
   });
+
+  testWidgets(
+    'selected-photo access starts the available scan without reprompting',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final coordinator = _Coordinator(MediaAccessStatus.limitedSelectedAccess);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: PhotoRecoveryAppShell(accessCoordinator: coordinator),
+        ),
+      );
+
+      await tester.tap(find.text('Recover Photos'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('Storage Access'), findsNothing);
+      expect(find.text('Results'), findsOneWidget);
+      expect(coordinator.requestCalls, 0);
+    },
+  );
 
   testWidgets('rationale remains usable with large text and dark theme', (
     tester,

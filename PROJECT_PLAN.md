@@ -11,7 +11,7 @@
 8. Camera & Gallery recovery
 9. Screenshots & Downloads recovery
 10. Messaging/shared-media recovery
-11. SD card/custom-folder recovery
+11. SD card recovery
 12. Duplicate/best-copy resolver
 13. Possible Copies
 14. Recovery Shield

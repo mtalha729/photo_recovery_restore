@@ -29,7 +29,11 @@ class VerifiedSourceRecoveryDiagnostics {
   final int filteredIneligibleCount;
 }
 
-enum VerifiedSourceRecoveryFailureCode { accessUnavailable, platformFailure }
+enum VerifiedSourceRecoveryFailureCode {
+  accessUnavailable,
+  platformFailure,
+  resourceLimit,
+}
 
 sealed class VerifiedSourceRecoveryResult {
   const VerifiedSourceRecoveryResult();

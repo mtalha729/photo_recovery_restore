@@ -1,7 +1,7 @@
 enum RecoveryClassification {
   unclassified,
   verifiedDeleted,
-  protectedDeleted,
+  protectedCopy,
   possibleCopy,
   existingMedia,
   unavailable,
@@ -12,6 +12,5 @@ extension RecoveryClassificationX on RecoveryClassification {
   bool get isVerifiedDeleted => this == RecoveryClassification.verifiedDeleted;
 
   bool get isDeletedRecoveryResult =>
-      this == RecoveryClassification.verifiedDeleted ||
-      this == RecoveryClassification.protectedDeleted;
+      this == RecoveryClassification.verifiedDeleted;
 }

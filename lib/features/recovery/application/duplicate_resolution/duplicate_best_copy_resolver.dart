@@ -20,122 +20,121 @@ class DuplicateBestCopyResolver {
     }
 
     final allGroups = <ResolvedCopyGroup>[];
-    final bySource = <Object, List<MediaCandidate>>{};
-    for (final candidate in byId.values) {
-      (bySource[candidate.source] ??= []).add(candidate);
-    }
+    // Exact physical identity and verified bytes are device-wide facts, even
+    // when two providers assign different source categories to the same file.
+    final sourceCandidates = byId.values.toList(growable: false);
+    final sourceIds = {for (final value in sourceCandidates) value.id};
+    final exact = _DisjointSet(sourceIds);
+    final related = _DisjointSet(sourceIds);
+    final evidenceByCandidate = <String, Set<DuplicateGroupingEvidence>>{};
+    final identityIndex = <String, String>{};
+    final digestIndex = <String, String>{};
 
-    for (final sourceCandidates in bySource.values) {
-      final sourceIds = {for (final value in sourceCandidates) value.id};
-      final exact = _DisjointSet(sourceIds);
-      final related = _DisjointSet(sourceIds);
-      final evidenceByCandidate = <String, Set<DuplicateGroupingEvidence>>{};
-      final identityIndex = <String, String>{};
-      final digestIndex = <String, String>{};
-
-      for (final candidate in sourceCandidates) {
-        final identity = _stableIdentity(candidate);
-        if (identity != null) {
-          final prior = identityIndex[identity];
-          if (prior == null) {
-            identityIndex[identity] = candidate.id;
-          } else {
-            exact.union(prior, candidate.id);
-            related.union(prior, candidate.id);
-            _addEvidence(
-              evidenceByCandidate,
-              prior,
-              candidate.id,
-              DuplicateGroupingEvidence.stablePlatformIdentity,
-            );
-          }
-        }
-        final digest = candidate.verifiedContentDigest?.identityKey;
-        if (digest != null) {
-          final prior = digestIndex[digest];
-          if (prior == null) {
-            digestIndex[digest] = candidate.id;
-          } else {
-            exact.union(prior, candidate.id);
-            related.union(prior, candidate.id);
-            _addEvidence(
-              evidenceByCandidate,
-              prior,
-              candidate.id,
-              DuplicateGroupingEvidence.verifiedContentDigest,
-            );
-          }
+    for (final candidate in sourceCandidates) {
+      for (final identity in _stableIdentities(candidate)) {
+        final prior = identityIndex[identity];
+        if (prior == null) {
+          identityIndex[identity] = candidate.id;
+        } else {
+          exact.union(prior, candidate.id);
+          related.union(prior, candidate.id);
+          _addEvidence(
+            evidenceByCandidate,
+            prior,
+            candidate.id,
+            DuplicateGroupingEvidence.stablePlatformIdentity,
+          );
         }
       }
-
-      for (final relationship in relationships) {
-        if (!sourceIds.contains(relationship.firstCandidateId) ||
-            !sourceIds.contains(relationship.secondCandidateId)) {
-          continue;
+      final digest = candidate.verifiedContentDigest?.identityKey;
+      if (digest != null) {
+        final prior = digestIndex[digest];
+        if (prior == null) {
+          digestIndex[digest] = candidate.id;
+        } else {
+          exact.union(prior, candidate.id);
+          related.union(prior, candidate.id);
+          _addEvidence(
+            evidenceByCandidate,
+            prior,
+            candidate.id,
+            DuplicateGroupingEvidence.verifiedContentDigest,
+          );
         }
-        related.union(
-          relationship.firstCandidateId,
-          relationship.secondCandidateId,
-        );
-        _addEvidence(
-          evidenceByCandidate,
-          relationship.firstCandidateId,
-          relationship.secondCandidateId,
-          DuplicateGroupingEvidence.explicitRelatedVariant,
-        );
-      }
-
-      final components = <String, List<MediaCandidate>>{};
-      for (final candidate in sourceCandidates) {
-        (components[related.find(candidate.id)] ??= []).add(candidate);
-      }
-      for (final component in components.values) {
-        component.sort(_compareBest);
-        final best = component.first;
-        final bestExactRoot = exact.find(best.id);
-        final exactDuplicates =
-            component
-                .where(
-                  (value) =>
-                      value.id != best.id &&
-                      exact.find(value.id) == bestExactRoot,
-                )
-                .toList()
-              ..sort((a, b) => a.id.compareTo(b.id));
-        final exactIds = {best.id, ...exactDuplicates.map((value) => value.id)};
-        final variants =
-            component.where((value) => !exactIds.contains(value.id)).toList()
-              ..sort(_compareBest);
-        final groupEvidence = <DuplicateGroupingEvidence>{};
-        for (final candidate in component) {
-          groupEvidence.addAll(evidenceByCandidate[candidate.id] ?? const {});
-        }
-        allGroups.add(
-          ResolvedCopyGroup(
-            canonicalCandidate: best,
-            confirmedExactDuplicates: List.unmodifiable(exactDuplicates),
-            alternateVariants: List.unmodifiable(variants),
-            groupingEvidence: Set.unmodifiable(groupEvidence),
-            selectionCategory: _category(best),
-          ),
-        );
       }
     }
 
+    for (final relationship in relationships) {
+      if (!sourceIds.contains(relationship.firstCandidateId) ||
+          !sourceIds.contains(relationship.secondCandidateId)) {
+        continue;
+      }
+      related.union(
+        relationship.firstCandidateId,
+        relationship.secondCandidateId,
+      );
+      _addEvidence(
+        evidenceByCandidate,
+        relationship.firstCandidateId,
+        relationship.secondCandidateId,
+        DuplicateGroupingEvidence.explicitRelatedVariant,
+      );
+    }
+
+    final components = <String, List<MediaCandidate>>{};
+    for (final candidate in sourceCandidates) {
+      (components[related.find(candidate.id)] ??= []).add(candidate);
+    }
+    for (final component in components.values) {
+      component.sort(_compareBest);
+      final best = component.first;
+      final bestExactRoot = exact.find(best.id);
+      final exactDuplicates =
+          component
+              .where(
+                (value) =>
+                    value.id != best.id &&
+                    exact.find(value.id) == bestExactRoot,
+              )
+              .toList()
+            ..sort((a, b) => a.id.compareTo(b.id));
+      final exactIds = {best.id, ...exactDuplicates.map((value) => value.id)};
+      final variants =
+          component.where((value) => !exactIds.contains(value.id)).toList()
+            ..sort(_compareBest);
+      final groupEvidence = <DuplicateGroupingEvidence>{};
+      for (final candidate in component) {
+        groupEvidence.addAll(evidenceByCandidate[candidate.id] ?? const {});
+      }
+      allGroups.add(
+        ResolvedCopyGroup(
+          canonicalCandidate: best,
+          confirmedExactDuplicates: List.unmodifiable(exactDuplicates),
+          alternateVariants: List.unmodifiable(variants),
+          groupingEvidence: Set.unmodifiable(groupEvidence),
+          selectionCategory: _category(best),
+        ),
+      );
+    }
     allGroups.sort(
       (a, b) => a.canonicalCandidate.id.compareTo(b.canonicalCandidate.id),
     );
     return DuplicateResolutionResult(groups: List.unmodifiable(allGroups));
   }
 
-  String? _stableIdentity(MediaCandidate candidate) {
+  Iterable<String> _stableIdentities(MediaCandidate candidate) sync* {
     final uri = candidate.contentUri?.toString().trim();
-    if (uri != null && uri.isNotEmpty) return 'uri:$uri';
+    if (uri != null && uri.isNotEmpty) yield 'uri:$uri';
+    final path =
+        candidate.discoveryEvidence.canonicalPath ?? candidate.filePath;
+    if (path != null && path.trim().isNotEmpty) {
+      yield 'file:${path.trim().replaceAll('\\', '/')}';
+    }
     final volume = candidate.storageVolumeName?.trim().toLowerCase();
     final id = candidate.mediaStoreId;
-    return volume != null && volume.isNotEmpty && id != null && id >= 0
-        ? 'media:$volume:$id'
-        : null;
+    if (volume != null && volume.isNotEmpty && id != null && id >= 0) {
+      yield 'media:$volume:$id';
+    }
   }
 
   void _addEvidence(
@@ -171,6 +170,8 @@ class DuplicateBestCopyResolver {
         BestCopySelectionCategory.alternateFullQuality,
       RestoreCapability.lowerResolutionCopy =>
         BestCopySelectionCategory.lowerResolution,
+      RestoreCapability.unknownQualityCopy =>
+        BestCopySelectionCategory.unknownQuality,
       RestoreCapability.metadataOnly => BestCopySelectionCategory.metadataOnly,
       RestoreCapability.notRestorable => BestCopySelectionCategory.unusable,
     };
@@ -188,9 +189,10 @@ class DuplicateBestCopyResolver {
         RecoveryQuality.original => 0,
         RecoveryQuality.completeCopy => 1,
         RecoveryQuality.reducedResolutionCopy => 2,
-        RecoveryQuality.metadataOnly => 3,
-        RecoveryQuality.unavailable => 4,
-        RecoveryQuality.corrupted => 5,
+        RecoveryQuality.unknownQualityCopy => 3,
+        RecoveryQuality.metadataOnly => 4,
+        RecoveryQuality.unavailable => 5,
+        RecoveryQuality.corrupted => 6,
       };
 
   int _pixels(MediaCandidate candidate) {

@@ -73,8 +73,7 @@ class RecoveryShieldRestorePolicy {
     );
   }
 
-  bool _requiresScope(MediaSource source) =>
-      source == MediaSource.sdCard || source == MediaSource.customFolder;
+  bool _requiresScope(MediaSource source) => source == MediaSource.sdCard;
 
   String _destination(ProtectedMediaRecord record) {
     final safeOriginal = _safeRelativePath(record.originalLocation);
@@ -86,7 +85,7 @@ class RecoveryShieldRestorePolicy {
         safeOriginal ?? 'Pictures/Photo Recovery & Restore',
       MediaSource.recoveryShield ||
       MediaSource.unknown => 'Pictures/Photo Recovery & Restore',
-      MediaSource.sdCard || MediaSource.customFolder => throw StateError(
+      MediaSource.sdCard => throw StateError(
         'Scoped destinations are handled separately.',
       ),
     };

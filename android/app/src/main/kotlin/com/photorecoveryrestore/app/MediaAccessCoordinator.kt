@@ -40,8 +40,13 @@ class MediaAccessCoordinator(private val activity: Activity) {
                 Manifest.permission.READ_MEDIA_IMAGES,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
             )
-            "fullAccess" -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-            else -> requiredPermissions()
+            // Request both in one system dialog so Android can report a
+            // durable selected-photo grant separately from full-library access.
+            // The user still chooses the scope; the app cannot force full access.
+            else -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+            )
         }
     }
 
@@ -83,10 +88,7 @@ class MediaAccessCoordinator(private val activity: Activity) {
     }
 
     private fun requiredPermissions(): Array<String> = when {
-        Build.VERSION.SDK_INT >= 34 -> arrayOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
-        )
+        Build.VERSION.SDK_INT >= 34 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
         Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
         // Android 8–9 needs the legacy write grant for verified restore. The
         // manifest already scopes it to API 28, so it is never requested later.

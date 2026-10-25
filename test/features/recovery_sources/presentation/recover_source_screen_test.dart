@@ -31,6 +31,8 @@ void main() {
       RecoverySourceIntent.values.map((value) => value.title).toSet(),
       hasLength(4),
     );
+    expect(find.text('SD Card'), findsOneWidget);
+    expect(find.text('SD Card & Other Folders'), findsNothing);
   });
 
   for (final source in RecoverySourceIntent.values) {

@@ -148,8 +148,8 @@ void main() {
 
   test('controlled benchmark has zero false positives and false negatives', () {
     final report = runFixture(buildMixedAccuracyFixture());
-    expect(report.groundTruthDeleted, 7);
-    expect(report.truePositives, 7);
+    expect(report.groundTruthDeleted, 6);
+    expect(report.truePositives, 6);
     expect(report.falsePositives, 0);
     expect(report.falseNegatives, 0);
     expect(report.precision, 1);

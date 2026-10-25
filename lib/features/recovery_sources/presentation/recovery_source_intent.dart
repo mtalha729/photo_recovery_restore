@@ -4,13 +4,13 @@ enum RecoverySourceIntent {
   cameraGallery,
   messaging,
   screenshotsDownloads,
-  scopedFolders;
+  sdCard;
 
   String get title => switch (this) {
     cameraGallery => 'Camera & Gallery',
     messaging => 'Messaging',
     screenshotsDownloads => 'Screenshots & Downloads',
-    scopedFolders => 'SD Card & Other Folders',
+    sdCard => 'SD Card',
   };
 
   String get description => switch (this) {
@@ -18,7 +18,7 @@ enum RecoverySourceIntent {
     messaging => 'Images from supported messaging and shared-media locations.',
     screenshotsDownloads =>
       'Screenshots and images saved from apps or the web.',
-    scopedFolders => 'Choose an authorized SD card or another folder.',
+    sdCard => 'Photos on removable storage, when available.',
   };
 
   String get semanticLabel => 'Recover from $title';
@@ -27,7 +27,7 @@ enum RecoverySourceIntent {
     cameraGallery => Icons.photo_camera_outlined,
     messaging => Icons.forum_outlined,
     screenshotsDownloads => Icons.download_for_offline_outlined,
-    scopedFolders => Icons.folder_open_outlined,
+    sdCard => Icons.sd_card_outlined,
   };
 
   String get capabilityMessage => switch (this) {
@@ -37,6 +37,6 @@ enum RecoverySourceIntent {
       'Messaging media scanning will begin from the next recovery step.',
     screenshotsDownloads =>
       'You will choose Screenshots or Downloads in the next recovery step.',
-    scopedFolders => 'Folder authorization and selection will begin from the next recovery step.',
+    sdCard => 'SD card recovery will begin from the next recovery step.',
   };
 }

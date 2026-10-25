@@ -12,6 +12,8 @@ class StorageVolumeIdentity {
 
 enum FolderGrantState { active, permissionGrantLost, accessUnavailable }
 
+/// User-granted SAF tree metadata. The grant is read-only and is never treated
+/// as evidence that a file was deleted.
 class AuthorizedFolderScope {
   const AuthorizedFolderScope({
     required this.treeUri,
@@ -40,16 +42,25 @@ class FolderScopeMatcher {
     if (scope.grantState != FolderGrantState.active) {
       return ScopeMembership.ambiguous;
     }
+    final candidateUri = candidate.documentUri;
+    if (candidateUri != null &&
+        candidateUri.authority == scope.treeUri.authority) {
+      final treeId = _idAfter(scope.treeUri, 'tree') ?? scope.documentId;
+      final documentId = _idAfter(candidateUri, 'document');
+      if (treeId == null || documentId == null) return ScopeMembership.ambiguous;
+      return documentId == treeId || documentId.startsWith('$treeId/')
+          ? ScopeMembership.inside
+          : ScopeMembership.outside;
+    }
 
-    final documentMembership = _documentMembership(candidate, scope);
-    if (documentMembership != null) return documentMembership;
-
-    final scopeVolume = _clean(scope.volume?.mediaStoreVolumeName);
-    final candidateVolume = _clean(candidate.storageVolumeName);
+    final scopeVolume = scope.volume?.mediaStoreVolumeName.trim();
+    final candidateVolume = candidate.storageVolumeName?.trim();
     final prefix = _normalizePath(scope.relativePathPrefix);
     final candidatePath = _normalizePath(candidate.relativeLocation);
     if (scopeVolume == null ||
+        scopeVolume.isEmpty ||
         candidateVolume == null ||
+        candidateVolume.isEmpty ||
         prefix == null ||
         candidatePath == null) {
       return ScopeMembership.ambiguous;
@@ -62,38 +73,21 @@ class FolderScopeMatcher {
         : ScopeMembership.outside;
   }
 
-  ScopeMembership? _documentMembership(
-    MediaCandidate candidate,
-    AuthorizedFolderScope scope,
-  ) {
-    final candidateUri = candidate.documentUri;
-    if (candidateUri == null ||
-        candidateUri.authority != scope.treeUri.authority) {
-      return null;
-    }
-    final treeId = _idAfter(scope.treeUri, 'tree') ?? _clean(scope.documentId);
-    final documentId = _idAfter(candidateUri, 'document');
-    if (treeId == null || documentId == null) return ScopeMembership.ambiguous;
-    return documentId == treeId || documentId.startsWith('$treeId/')
-        ? ScopeMembership.inside
-        : ScopeMembership.outside;
-  }
-
   String? _idAfter(Uri uri, String marker) {
     final index = uri.pathSegments.indexOf(marker);
     return index >= 0 && index + 1 < uri.pathSegments.length
-        ? _clean(uri.pathSegments[index + 1])
+        ? uri.pathSegments[index + 1]
         : null;
   }
 
   String? _normalizePath(String? value) {
-    final clean = _clean(value)?.replaceAll('\\', '/');
-    if (clean == null) return null;
-    return clean.replaceAll(RegExp(r'/+$'), '').toLowerCase();
-  }
-
-  String? _clean(String? value) {
-    final clean = value?.trim();
-    return clean == null || clean.isEmpty ? null : clean;
+    final normalized = value
+        ?.trim()
+        .replaceAll('\\', '/')
+        .replaceAll(RegExp(r'/+'), '/')
+        .replaceAll(RegExp(r'^/+|/+$'), '');
+    return normalized == null || normalized.isEmpty
+        ? null
+        : normalized.toLowerCase();
   }
 }

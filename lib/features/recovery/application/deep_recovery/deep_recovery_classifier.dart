@@ -10,9 +10,10 @@ import '../recovery_evidence_classifier/recovery_evidence_classifier.dart';
 /// recovery classification or manufacture deletion evidence.
 enum DeepRecoveryDisposition {
   verifiedDeleted,
-  protectedDeleted,
+  protectedCopy,
   possibleFullQualityCopy,
   possibleLowerQualityCopy,
+  possibleUnknownQualityCopy,
   thumbnailCopy,
   existingMedia,
   corrupted,
@@ -42,8 +43,8 @@ class DeepRecoveryClassifier {
     if (decision.classification == RecoveryClassification.verifiedDeleted) {
       return DeepRecoveryDisposition.verifiedDeleted;
     }
-    if (decision.classification == RecoveryClassification.protectedDeleted) {
-      return DeepRecoveryDisposition.protectedDeleted;
+    if (decision.classification == RecoveryClassification.protectedCopy) {
+      return DeepRecoveryDisposition.protectedCopy;
     }
     if (decision.classification == RecoveryClassification.corrupted) {
       return DeepRecoveryDisposition.corrupted;
@@ -76,6 +77,10 @@ class DeepRecoveryClassifier {
     }
     final width = candidate.width;
     final height = candidate.height;
+    if (candidate.restoreCapability == RestoreCapability.unknownQualityCopy ||
+        candidate.recoveryQuality == RecoveryQuality.unknownQualityCopy) {
+      return DeepRecoveryDisposition.possibleUnknownQualityCopy;
+    }
     if (candidate.restoreCapability == RestoreCapability.lowerResolutionCopy ||
         candidate.recoveryQuality == RecoveryQuality.reducedResolutionCopy) {
       if (width != null && height != null && width <= 512 && height <= 512) {

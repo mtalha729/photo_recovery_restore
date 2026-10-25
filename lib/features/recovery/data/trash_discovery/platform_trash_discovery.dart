@@ -86,6 +86,10 @@ class TrashDiscoveryPlatformMapper {
       if (value is! Map<Object?, Object?> || value['isTrashed'] != true) {
         return _malformedResponse();
       }
+      if (value['initialBytesReadable'] != null &&
+          value['initialBytesReadable'] is! bool) {
+        return _malformedResponse();
+      }
       final mappedMetadata = CurrentMediaMetadataPlatformMapper.fromResponse({
         'status': 'success',
         'metadata': value,
@@ -94,7 +98,10 @@ class TrashDiscoveryPlatformMapper {
         return _malformedResponse();
       }
       items.add(
-        VerifiedTrashItem.fromPlatformTrash(metadata: mappedMetadata.metadata),
+        VerifiedTrashItem.fromPlatformTrash(
+          metadata: mappedMetadata.metadata,
+          initialBytesReadable: value['initialBytesReadable'] != false,
+        ),
       );
     }
 
@@ -111,6 +118,21 @@ class TrashDiscoveryPlatformMapper {
     if (scannedVolumeName != null && scannedVolumeName is! String) {
       return _malformedResponse();
     }
+    final invalidFilesRejected = response['invalidFilesRejected'];
+    if (invalidFilesRejected != null &&
+        (invalidFilesRejected is! int || invalidFilesRejected < 0)) {
+      return _malformedResponse();
+    }
+    final inaccessibleFiles = response['inaccessibleFiles'];
+    if (inaccessibleFiles != null &&
+        (inaccessibleFiles is! int || inaccessibleFiles < 0)) {
+      return _malformedResponse();
+    }
+    final rawRowsExamined = response['rawRowsExamined'];
+    if (rawRowsExamined != null &&
+        (rawRowsExamined is! int || rawRowsExamined < 0)) {
+      return _malformedResponse();
+    }
 
     return TrashDiscoverySuccess(
       TrashDiscoveryPage(
@@ -118,6 +140,11 @@ class TrashDiscoveryPlatformMapper {
         nextAfterMediaStoreId: continuation as int?,
         nextContinuationToken: continuationToken as String?,
         scannedVolumeName: scannedVolumeName as String?,
+        invalidFilesRejected: invalidFilesRejected is int
+            ? invalidFilesRejected
+            : 0,
+        inaccessibleFiles: inaccessibleFiles is int ? inaccessibleFiles : 0,
+        rawRowsExamined: rawRowsExamined is int ? rawRowsExamined : 0,
       ),
     );
   }

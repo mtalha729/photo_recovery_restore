@@ -9,7 +9,13 @@ import '../../domain/recovery_quality.dart';
 import '../../domain/restore_capability.dart';
 import '../../domain/recovery_discovery_evidence.dart';
 
-enum DeepStorageAccessMode { legacySharedRead, allFilesAccess, unavailable }
+enum DeepStorageAccessMode {
+  legacySharedRead,
+  allFilesAccess,
+  scopedMediaRead,
+  scopedStorage,
+  unavailable,
+}
 
 enum DeepStorageCapabilityStatus {
   available,
@@ -25,6 +31,9 @@ class DeepStorageCapabilityState {
     required this.requiresAllFilesAccess,
     required this.mode,
     required this.androidApiLevel,
+    this.requestSupported = false,
+    this.debugBuild = false,
+    this.reason,
   });
 
   final DeepStorageCapabilityStatus status;
@@ -32,6 +41,9 @@ class DeepStorageCapabilityState {
   final bool requiresAllFilesAccess;
   final DeepStorageAccessMode mode;
   final int? androidApiLevel;
+  final bool requestSupported;
+  final bool debugBuild;
+  final String? reason;
 }
 
 class PlatformDeepStorageRecoveryProvider
@@ -84,15 +96,21 @@ class PlatformDeepStorageRecoveryProvider
       mode: switch (raw['accessMode']) {
         'legacySharedRead' => DeepStorageAccessMode.legacySharedRead,
         'allFilesAccess' => DeepStorageAccessMode.allFilesAccess,
+        'scopedMediaRead' => DeepStorageAccessMode.scopedMediaRead,
+        'scopedStorage' => DeepStorageAccessMode.scopedStorage,
         _ => DeepStorageAccessMode.unavailable,
       },
       androidApiLevel: raw['apiLevel'] is int ? raw['apiLevel']! as int : null,
+      requestSupported: raw['requestSupported'] == true,
+      debugBuild: raw['debugBuild'] == true,
+      reason: _text(raw['reason']),
     );
   }
 
   Future<void> openAccessSettings() =>
       _channel.invokeMethod<void>('openDeepStorageAccessSettings');
 
+  @override
   Future<void> cancelActiveScan() async {
     try {
       await _channel.invokeMethod<void>('cancelDeepStorageScan');
@@ -120,11 +138,12 @@ class PlatformDeepStorageRecoveryProvider
         'pageSize': request.pageSize,
         'profile': request.profile.name,
         'continuationToken': request.continuationToken,
-        if (request.continuationToken == null &&
-            request.currentMediaLocationKeys.isNotEmpty)
-          'currentMediaLocationKeys': request.currentMediaLocationKeys.toList(
-            growable: false,
-          ),
+        // The native scan session retains this comparison index. Re-sending
+        // it on every page makes large libraries pay the same channel-copy
+        // cost hundreds of times.
+        if (request.continuationToken == null)
+          'existingStorageLocationKeys': request.existingStorageLocationKeys
+              .toList(growable: false),
       });
       return mapResponse(raw);
     } on PlatformException catch (error) {
@@ -146,6 +165,8 @@ class PlatformDeepStorageRecoveryProvider
       return DeepRecoveryProviderUnavailable(
         code == 'accessRequired'
             ? DeepProviderAvailability.accessRequired
+            : code == 'unsupported'
+            ? DeepProviderAvailability.unsupported
             : DeepProviderAvailability.failed,
         message: _text(raw['message']),
       );
@@ -167,6 +188,7 @@ class PlatformDeepStorageRecoveryProvider
       final mime = _text(value['mimeType']);
       if (path == null || size == null || mime == null) return _malformed();
       final thumbnail = value['isThumbnailLike'] == true;
+      final qualityUnknown = !thumbnail && (width == null || height == null);
       final reduced =
           thumbnail ||
           (width != null && height != null && width <= 512 && height <= 512);
@@ -197,10 +219,14 @@ class PlatformDeepStorageRecoveryProvider
             modifiedAt: _date(value['modifiedMillis']),
             classification: RecoveryClassification.possibleCopy,
             deletionEvidence: DeletionEvidence(),
-            restoreCapability: reduced
+            restoreCapability: qualityUnknown
+                ? RestoreCapability.unknownQualityCopy
+                : reduced
                 ? RestoreCapability.lowerResolutionCopy
                 : RestoreCapability.alternateFullQualityCopy,
-            recoveryQuality: reduced
+            recoveryQuality: qualityUnknown
+                ? RecoveryQuality.unknownQualityCopy
+                : reduced
                 ? RecoveryQuality.reducedResolutionCopy
                 : RecoveryQuality.completeCopy,
             discoveryEvidence: RecoveryDiscoveryEvidence(
@@ -209,6 +235,7 @@ class PlatformDeepStorageRecoveryProvider
               isTrashLike: value['isTrashLike'] == true,
               isThumbnailLike: thumbnail,
               isCacheLike: value['isCacheLike'] == true,
+              isRecoveryCopyLike: value['isRecoveryCopyLike'] == true,
               isHidden: value['isHidden'] == true,
               isExtensionMismatch: value['isExtensionMismatch'] == true,
               isUnindexed: true,
@@ -234,6 +261,9 @@ class PlatformDeepStorageRecoveryProvider
           _nonNegative(raw['carvedTempBytesReclaimed']) ?? 0,
       invalidFilesRejected: _nonNegative(raw['invalidFilesRejected']) ?? 0,
       unavailableFiles: _nonNegative(raw['unavailableFiles']) ?? 0,
+      unavailableDirectories: _nonNegative(raw['unavailableDirectories']) ?? 0,
+      rootDirectoriesOpened: _nonNegative(raw['rootDirectoriesOpened']) ?? 0,
+      signatureFilesInspected: _nonNegative(raw['standaloneFilesInspected']) ?? 0,
       unsupportedFiles: _nonNegative(raw['unsupportedFiles']) ?? 0,
       directoriesExamined: _nonNegative(raw['directoriesExamined']) ?? 0,
       directoryWorkConsumed: _nonNegative(raw['directoryWorkConsumed']) ?? 0,

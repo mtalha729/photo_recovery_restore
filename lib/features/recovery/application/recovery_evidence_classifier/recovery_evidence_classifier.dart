@@ -24,10 +24,14 @@ class RecoveryEvidenceClassifier {
       );
     }
 
-    if (evidence.contains(DeletionEvidenceReason.recoveryShieldRecord)) {
+    // A Recovery Shield object is the protected surviving copy itself. Even
+    // if source-level metadata carries a trash marker, that marker cannot be
+    // transferred to the backup and presented as proof that the backup was
+    // deleted.
+    if (candidate.discoveryEvidence.isRecoveryShieldBackup) {
       return RecoveryClassificationDecision(
-        classification: RecoveryClassification.protectedDeleted,
-        reason: RecoveryClassificationReason.protectedDeletionEvidence,
+        classification: RecoveryClassification.protectedCopy,
+        reason: RecoveryClassificationReason.protectedCopyEvidence,
         deletionEvidence: evidence,
       );
     }
@@ -88,8 +92,10 @@ class RecoveryEvidenceClassifier {
     return candidate.classification == RecoveryClassification.possibleCopy ||
         candidate.recoveryQuality == RecoveryQuality.completeCopy ||
         candidate.recoveryQuality == RecoveryQuality.reducedResolutionCopy ||
+        candidate.recoveryQuality == RecoveryQuality.unknownQualityCopy ||
         candidate.restoreCapability ==
             RestoreCapability.alternateFullQualityCopy ||
-        candidate.restoreCapability == RestoreCapability.lowerResolutionCopy;
+        candidate.restoreCapability == RestoreCapability.lowerResolutionCopy ||
+        candidate.restoreCapability == RestoreCapability.unknownQualityCopy;
   }
 }

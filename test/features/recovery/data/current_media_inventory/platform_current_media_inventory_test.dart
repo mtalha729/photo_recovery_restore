@@ -1,8 +1,37 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_recovery_restore/features/recovery/data/current_media_inventory/current_media_inventory_models.dart';
 import 'package:photo_recovery_restore/features/recovery/data/current_media_inventory/platform_current_media_inventory.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('accepts larger bounded pages for current-media scan setup', () async {
+    const channel = MethodChannel('test/current_media_inventory');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var requestedPageSize = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      requestedPageSize =
+          (call.arguments as Map<Object?, Object?>)['pageSize']! as int;
+      return {
+        'status': 'success',
+        'items': <Object?>[],
+        'nextContinuationToken': null,
+        'nextAfterMediaStoreId': null,
+      };
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    final inventory = PlatformCurrentMediaInventory(channel: channel);
+    final result = await inventory.getCurrentMediaPage(
+      const CurrentMediaPageRequest(pageSize: 500),
+    );
+
+    expect(requestedPageSize, 500);
+    expect(result, isA<CurrentMediaInventorySuccess>());
+  });
+
   group('CurrentMediaInventoryPlatformMapper', () {
     test('maps current media records without recovery classification', () {
       final result = CurrentMediaInventoryPlatformMapper.fromResponse({

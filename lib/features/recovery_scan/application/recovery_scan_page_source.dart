@@ -4,13 +4,13 @@ import '../../recovery/application/existing_media_exclusion/existing_media_index
 import '../../recovery/application/messaging_recovery/messaging_recovery_pipeline.dart';
 import '../../recovery/application/scoped_storage_recovery/scoped_storage_recovery_models.dart';
 import '../../recovery/application/scoped_storage_recovery/scoped_storage_recovery_pipeline.dart';
-import '../../recovery/application/scoped_storage_recovery/storage_scope_models.dart';
 import '../../recovery/application/screenshots_downloads_recovery/screenshots_downloads_recovery_pipeline.dart';
 import '../../recovery/application/scan_runtime/scan_cancellation.dart';
 import '../../recovery/application/source_recovery/verified_source_recovery_models.dart';
 import '../../recovery/application/source_recovery/verified_source_recovery_pipeline.dart';
 import '../../recovery/data/trash_discovery/trash_discovery_models.dart';
 import '../../recovery/data/deep_storage/deep_storage_recovery_provider.dart';
+import 'authorized_folder_scan_models.dart';
 import '../../recovery/domain/media_candidate.dart';
 import '../../recovery/domain/media_source.dart';
 import 'recovery_scan_models.dart';
@@ -43,9 +43,24 @@ abstract interface class PossibleCopiesAwarePageSource {
   List<MediaCandidate> get possibleCopies;
 }
 
+abstract interface class CurrentPhotosAwarePageSource {
+  List<MediaCandidate> get currentPhotos;
+  set onCurrentPhotosProgress(void Function(List<MediaCandidate>)? callback);
+}
+
+abstract interface class AuthorizedFolderScanAwarePageSource {
+  bool get canScanAuthorizedFolder;
+
+  Future<AuthorizedFolderScanOutcome> scanAuthorizedFolder({
+    required RecoveryScanSource source,
+    required void Function(AuthorizedFolderScanProgress progress) onProgress,
+  });
+}
+
 abstract interface class DeepScanCapabilityAwarePageSource {
   DeepStorageCapabilityStatus get deepCapabilityStatus;
   String? get deepCapabilityMessage;
+  bool get canRequestDeepStorageAccess;
   Future<void> openDeepScanSettings();
   Future<bool> refreshDeepScanCapability();
 }
@@ -73,7 +88,6 @@ class ExistingRecoveryPipelinePageSource implements RecoveryScanPageSource {
     required this.allPhotos,
     required this.existingMediaIndex,
     required this.androidApiLevel,
-    this.authorizedFolderScope,
   });
 
   final CameraGalleryRecoveryPipeline cameraGallery;
@@ -83,7 +97,6 @@ class ExistingRecoveryPipelinePageSource implements RecoveryScanPageSource {
   final VerifiedSourceRecoveryPipeline allPhotos;
   final ExistingMediaIndex existingMediaIndex;
   final int androidApiLevel;
-  final AuthorizedFolderScope? authorizedFolderScope;
 
   @override
   Future<VerifiedSourceRecoveryResult> loadPage(
@@ -119,15 +132,6 @@ class ExistingRecoveryPipelinePageSource implements RecoveryScanPageSource {
         androidApiLevel: androidApiLevel,
       ),
       MediaSource.sdCard,
-    ),
-    RecoveryScanSource.customFolder => _scopedPage(
-      scopedStorage.getSelectedFolderPage(
-        scope: authorizedFolderScope,
-        request: request,
-        existingMediaIndex: existingMediaIndex,
-        androidApiLevel: androidApiLevel,
-      ),
-      MediaSource.customFolder,
     ),
   };
 
@@ -197,12 +201,9 @@ class ExistingRecoveryPipelinePageSource implements RecoveryScanPageSource {
           nextContinuationToken: result.nextContinuationToken,
           scannedVolumeName: result.scannedVolumeName,
         ),
-      ScopedRecoveryCapability.unsupportedDeletedDiscoveryForScope ||
       ScopedRecoveryCapability.unsupportedPlatformCapability =>
         VerifiedSourceRecoveryUnsupported(source: source),
-      ScopedRecoveryCapability.folderSelectionRequired ||
-      ScopedRecoveryCapability.scopeAccessUnavailable ||
-      ScopedRecoveryCapability.permissionGrantLost =>
+      ScopedRecoveryCapability.scopeAccessUnavailable =>
         VerifiedSourceRecoveryFailure(
           source: source,
           code: VerifiedSourceRecoveryFailureCode.accessUnavailable,

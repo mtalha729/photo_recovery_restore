@@ -4,6 +4,7 @@ import '../possible_copies/possible_copies_discovery.dart';
 import '../possible_copies/possible_copy_models.dart';
 import '../scan_runtime/scan_cancellation.dart';
 import '../../domain/media_candidate.dart';
+import '../../domain/deletion_evidence.dart';
 import '../../domain/media_source.dart';
 import 'deep_recovery_classifier.dart';
 import 'deep_recovery_provider.dart';
@@ -15,12 +16,17 @@ class DeepRecoveryEngineResult {
     required this.possibleCopies,
     required this.providersVisited,
     required this.recordsDiscovered,
+    this.existingRecordsExcluded = 0,
+    this.lowerPriorityRecordsOmitted = 0,
     required this.duplicateRecordsSuppressed,
     required this.invalidFilesRejected,
     required this.unavailableFiles,
     this.unsupportedFiles = 0,
+    this.unavailableDirectories = 0,
     required this.filesExamined,
     required this.directoriesExamined,
+    this.rootDirectoriesOpened = 0,
+    this.signatureFilesInspected = 0,
     this.entriesExamined = 0,
     this.currentFilesSkipped = 0,
     this.signatureCacheHits = 0,
@@ -41,12 +47,17 @@ class DeepRecoveryEngineResult {
   final PossibleCopiesDiscoveryResult possibleCopies;
   final Set<DeepRecoveryProviderKind> providersVisited;
   final int recordsDiscovered;
+  final int existingRecordsExcluded;
+  final int lowerPriorityRecordsOmitted;
   final int duplicateRecordsSuppressed;
   final int invalidFilesRejected;
   final int unavailableFiles;
   final int unsupportedFiles;
+  final int unavailableDirectories;
   final int filesExamined;
   final int directoriesExamined;
+  final int rootDirectoriesOpened;
+  final int signatureFilesInspected;
   final int entriesExamined;
   final int currentFilesSkipped;
   final int signatureCacheHits;
@@ -76,21 +87,29 @@ class DeepRecoveryEngine {
   Future<DeepRecoveryEngineResult> scan({
     required Iterable<DeepRecoveryDiscoveryProvider> providers,
     required ExistingMediaIndex existingMediaIndex,
+    Set<String> alreadyDiscoveredStorageLocationKeys = const {},
     required MediaSource source,
-    Set<String> currentMediaLocationKeys = const {},
     PhotoRecoveryProfile profile = PhotoRecoveryProfile.fastDeep,
     ScanCancellationToken? cancellationToken,
     int pageSize = 200,
     void Function(DeepRecoveryEngineProgress progress)? onProgress,
   }) async {
     final records = <String, DeepRecoveryDiscoveryRecord>{};
+    final dispositions = <String, DeepRecoveryDisposition>{};
+    final existingStorageLocationKeys = Set<String>.unmodifiable({
+      ...existingMediaIndex.ordinaryStorageLocationKeys,
+      ...alreadyDiscoveredStorageLocationKeys,
+    });
     final visited = <DeepRecoveryProviderKind>{};
     var duplicateRecords = 0;
     var invalidFiles = 0;
     var unavailableFiles = 0;
     var unsupportedFiles = 0;
+    var unavailableDirectories = 0;
     var filesExamined = 0;
     var directoriesExamined = 0;
+    var rootDirectoriesOpened = 0;
+    var signatureFilesInspected = 0;
     var entriesExamined = 0;
     var currentFilesSkipped = 0;
     var signatureCacheHits = 0;
@@ -103,22 +122,27 @@ class DeepRecoveryEngine {
     var repeatedCursorDetections = 0;
     String? completionReason;
     var pageCount = 0;
+    var existingRecordsExcluded = 0;
+    var retainedExistingRecords = 0;
+    var retainedNonCandidates = 0;
+    var retainedGenericCopies = 0;
+    var lowerPriorityRecordsOmitted = 0;
 
+    var wasCancelled = false;
+    var resultLimitReached = false;
+    DeepProviderAvailability? failureAvailability;
+    String? failureMessage;
+    final streamedCopyKeys = <String>{};
+
+    providerLoop:
     for (final provider in providers) {
       String? token;
       final seenTokens = <String>{};
-      do {
+      while (true) {
         if (cancellationToken?.isCancelled == true) {
-          return _cancelled(
-            visited,
-            records.length,
-            duplicateRecords,
-            invalidFiles,
-            unavailableFiles,
-            filesExamined,
-            directoriesExamined,
-            volumesScanned,
-          );
+          wasCancelled = true;
+          completionReason = 'cancelled';
+          break providerLoop;
         }
         visited.add(provider.kind);
         final result = await provider.getPage(
@@ -127,38 +151,32 @@ class DeepRecoveryEngine {
             source: source,
             profile: profile,
             continuationToken: token,
-            currentMediaLocationKeys: token == null
-                ? currentMediaLocationKeys
-                : const {},
+            existingStorageLocationKeys: existingStorageLocationKeys,
           ),
         );
         if (result is DeepRecoveryProviderUnavailable) {
-          return DeepRecoveryEngineResult(
-            completed: false,
-            byDisposition: const {},
-            possibleCopies: const PossibleCopiesDiscoveryResult(
-              groups: [],
-              verifiedDeletedCount: 0,
-            ),
-            providersVisited: Set.unmodifiable(visited),
-            recordsDiscovered: records.length,
-            duplicateRecordsSuppressed: duplicateRecords,
-            invalidFilesRejected: invalidFiles,
-            unavailableFiles: unavailableFiles,
-            filesExamined: filesExamined,
-            directoriesExamined: directoriesExamined,
-            volumesScanned: Set.unmodifiable(volumesScanned),
-            duplicateDirectorySkips: duplicateDirectorySkips,
-            repeatedCursorDetections: repeatedCursorDetections,
-            completionReason: result.message,
-            failureAvailability: result.availability,
-            failureMessage: result.message,
-          );
+          if (cancellationToken?.isCancelled == true) {
+            wasCancelled = true;
+            completionReason = 'cancelled';
+          } else {
+            failureAvailability = result.availability;
+            failureMessage =
+                result.message ?? 'Deep provider became unavailable.';
+            completionReason = 'providerUnavailable';
+          }
+          break providerLoop;
         }
+
         final page = result as DeepRecoveryProviderPage;
         pageCount++;
         filesExamined += page.filesExamined;
         directoriesExamined += page.directoriesExamined;
+        if (page.rootDirectoriesOpened > rootDirectoriesOpened) {
+          rootDirectoriesOpened = page.rootDirectoriesOpened;
+        }
+        if (page.signatureFilesInspected > signatureFilesInspected) {
+          signatureFilesInspected = page.signatureFilesInspected;
+        }
         entriesExamined += page.entriesExamined;
         currentFilesSkipped += page.currentFilesSkipped;
         signatureCacheHits += page.signatureCacheHits;
@@ -173,6 +191,8 @@ class DeepRecoveryEngine {
         invalidFiles += page.invalidFilesRejected;
         unavailableFiles += page.unavailableFiles;
         unsupportedFiles += page.unsupportedFiles;
+        unavailableDirectories += page.unavailableDirectories;
+        final pageCopyCandidates = <MediaCandidate>[];
         for (final record in page.items) {
           if (source != MediaSource.unknown &&
               record.candidate.source != source) {
@@ -181,8 +201,62 @@ class DeepRecoveryEngine {
           final key = _stableKey(record.candidate);
           if (records.containsKey(key)) {
             duplicateRecords++;
-          } else {
-            records[key] = record;
+            continue;
+          }
+          final disposition = record.isAccessibleCurrentMedia
+              ? DeepRecoveryDisposition.existingMedia
+              : !_isRecoveryRelevantArtifact(record)
+              ? DeepRecoveryDisposition.existingMedia
+              : classifier.classify(
+                  candidate: record.candidate,
+                  existingMediaDecision: exclusionEngine.evaluate(
+                    record.candidate,
+                    existingMediaIndex,
+                  ),
+                  provenCopyType: record.hasStrongCopyRelationship
+                      ? record.provenCopyType
+                      : null,
+                );
+          if (records.length >=
+                  _maximumRetainedRecords - _reservedLateArtifactSlots &&
+              disposition != DeepRecoveryDisposition.verifiedDeleted &&
+              disposition != DeepRecoveryDisposition.protectedCopy &&
+              !record.candidate.discoveryEvidence.isEmbeddedPayload) {
+            lowerPriorityRecordsOmitted++;
+            continue;
+          }
+          if (disposition == DeepRecoveryDisposition.existingMedia) {
+            existingRecordsExcluded++;
+            if (retainedExistingRecords >= _maximumRetainedExistingRecords) {
+              continue;
+            }
+            retainedExistingRecords++;
+          } else if (!_isPossibleCopy(disposition) &&
+              disposition != DeepRecoveryDisposition.verifiedDeleted &&
+              disposition != DeepRecoveryDisposition.protectedCopy) {
+            if (retainedNonCandidates >= _maximumRetainedNonCandidates) {
+              lowerPriorityRecordsOmitted++;
+              continue;
+            }
+            retainedNonCandidates++;
+          } else if (_isPossibleCopy(disposition) &&
+              !_isHighValueArtifact(record)) {
+            if (retainedGenericCopies >= _maximumRetainedGenericCopies) {
+              lowerPriorityRecordsOmitted++;
+              continue;
+            }
+            retainedGenericCopies++;
+          }
+          if (records.length >= _maximumRetainedRecords) {
+            resultLimitReached = true;
+            break;
+          }
+          records[key] = record;
+          dispositions[key] = disposition;
+
+          if (record.isAccessibleCurrentMedia) continue;
+          if (_isPossibleCopy(disposition) && streamedCopyKeys.add(key)) {
+            pageCopyCandidates.add(record.candidate);
           }
         }
         onProgress?.call(
@@ -194,6 +268,7 @@ class DeepRecoveryEngine {
             pageFilesExamined: page.filesExamined,
             pageDirectoriesConsumed: page.directoryWorkConsumed,
             pageRecordsReturned: page.items.length,
+            unavailableDirectories: page.unavailableDirectories,
             remainingDirectoryQueue: page.remainingDirectoryQueue,
             visitedDirectoryCount: page.visitedDirectoryCount,
             duplicateDirectorySkips: page.duplicateDirectorySkips,
@@ -206,83 +281,78 @@ class DeepRecoveryEngine {
                       .toUnsigned(32)
                       .toRadixString(16),
             currentArea: page.currentArea,
+            possibleCopyCandidates: List.unmodifiable(pageCopyCandidates),
           ),
         );
+
+        if (cancellationToken?.isCancelled == true) {
+          wasCancelled = true;
+          completionReason = 'cancelled';
+          break providerLoop;
+        }
+        if (resultLimitReached) {
+          failureAvailability = DeepProviderAvailability.failed;
+          failureMessage = 'Deep scan stopped at the safe in-memory result limit; partial results are kept.';
+          completionReason = 'resultMemoryLimit';
+          await provider.cancelActiveScan();
+          break providerLoop;
+        }
         final nextToken = page.nextContinuationToken;
-        if (page.providerExhausted &&
-            (page.completionReason == 'repeatedCursor' ||
-                page.completionReason == 'noProgress')) {
-          return DeepRecoveryEngineResult(
-            completed: false,
-            byDisposition: const {},
-            possibleCopies: const PossibleCopiesDiscoveryResult(
-              groups: [],
-              verifiedDeletedCount: 0,
-            ),
-            providersVisited: Set.unmodifiable(visited),
-            recordsDiscovered: records.length,
-            duplicateRecordsSuppressed: duplicateRecords,
-            invalidFilesRejected: invalidFiles,
-            unavailableFiles: unavailableFiles,
-            filesExamined: filesExamined,
-            directoriesExamined: directoriesExamined,
-            volumesScanned: Set.unmodifiable(volumesScanned),
-            duplicateDirectorySkips: duplicateDirectorySkips,
-            repeatedCursorDetections: repeatedCursorDetections,
-            completionReason: page.completionReason,
-            failureAvailability: DeepProviderAvailability.failed,
-            failureMessage: 'Deep Scan did not reach a safe completion point.',
-          );
-        }
         if (page.providerExhausted) {
+          if (page.completionReason == 'repeatedCursor' ||
+              page.completionReason == 'noProgress' ||
+              page.completionReason == 'exhaustedWithUnreadableEntries' ||
+              page.completionReason == 'exhaustedWithResourceLimit' ||
+              page.completionReason == 'exhaustedWithCarvedStorageLimit') {
+            failureAvailability = DeepProviderAvailability.failed;
+            failureMessage = switch (page.completionReason) {
+              'exhaustedWithUnreadableEntries' => 'Some shared-storage files or folders could not be read; coverage is partial.',
+              'exhaustedWithResourceLimit' => 'Deep scan reached a safe traversal resource limit; coverage is partial.',
+              'exhaustedWithCarvedStorageLimit' => 'Embedded-image cache reached its safe storage limit; other discovered results are retained.',
+              _ => 'Deep scan did not reach a safe completion point.',
+            };
+            completionReason = page.completionReason;
+            break providerLoop;
+          }
           completionReason = page.completionReason ?? 'exhausted';
-          token = null;
-        } else if (nextToken == null) {
-          token = null;
-        } else if (nextToken == token || !seenTokens.add(nextToken)) {
-          repeatedCursorDetections++;
-          completionReason = 'repeatedCursor';
-          token = null;
-        } else {
-          token = nextToken;
+          break;
         }
-      } while (token != null);
+        if (nextToken == null) {
+          failureAvailability = DeepProviderAvailability.failed;
+          failureMessage =
+              'Deep provider stopped without an exhaustion signal.';
+          completionReason = 'missingContinuation';
+          break providerLoop;
+        }
+        if (nextToken == token || !seenTokens.add(nextToken)) {
+          repeatedCursorDetections++;
+          failureAvailability = DeepProviderAvailability.failed;
+          failureMessage = 'Deep provider repeated a continuation state.';
+          completionReason = 'repeatedCursor';
+          break providerLoop;
+        }
+        token = nextToken;
+      }
     }
 
-    if (cancellationToken?.isCancelled == true) {
-      return _cancelled(
-        visited,
-        records.length,
-        duplicateRecords,
-        invalidFiles,
-        unavailableFiles,
-        filesExamined,
-        directoriesExamined,
-        volumesScanned,
-      );
+    if (lowerPriorityRecordsOmitted > 0 &&
+        failureAvailability == null &&
+        !wasCancelled) {
+      failureAvailability = DeepProviderAvailability.failed;
+      failureMessage = 'Lower-priority records exceeded the bounded retention budget; recovery artifacts found later were still scanned and kept.';
+      completionReason = 'lowerPriorityRetentionLimit';
     }
 
     final buckets = <DeepRecoveryDisposition, List<MediaCandidate>>{};
     final deleted = <MediaCandidate>[];
     final accessible = <MediaCandidate>[];
     final relationships = <PossibleCopyRelationship>[];
-    for (final record in records.values) {
+    for (final entry in records.entries) {
+      final record = entry.value;
       final candidate = record.candidate;
-      final disposition = record.isAccessibleCurrentMedia
-          ? DeepRecoveryDisposition.existingMedia
-          : classifier.classify(
-              candidate: candidate,
-              existingMediaDecision: exclusionEngine.evaluate(
-                candidate,
-                existingMediaIndex,
-              ),
-              provenCopyType: record.hasStrongCopyRelationship
-                  ? record.provenCopyType
-                  : null,
-            );
+      final disposition = dispositions[entry.key]!;
       (buckets[disposition] ??= []).add(candidate);
-      if (disposition == DeepRecoveryDisposition.verifiedDeleted ||
-          disposition == DeepRecoveryDisposition.protectedDeleted) {
+      if (disposition == DeepRecoveryDisposition.verifiedDeleted) {
         deleted.add(candidate);
       } else {
         accessible.add(candidate);
@@ -309,7 +379,7 @@ class DeepRecoveryEngine {
       relationships: relationships,
     );
     return DeepRecoveryEngineResult(
-      completed: true,
+      completed: !wasCancelled && failureAvailability == null,
       byDisposition:
           Map<DeepRecoveryDisposition, List<MediaCandidate>>.unmodifiable({
             for (final entry in buckets.entries)
@@ -318,12 +388,17 @@ class DeepRecoveryEngine {
       possibleCopies: copies,
       providersVisited: Set.unmodifiable(visited),
       recordsDiscovered: records.length,
+      existingRecordsExcluded: existingRecordsExcluded,
+      lowerPriorityRecordsOmitted: lowerPriorityRecordsOmitted,
       duplicateRecordsSuppressed: duplicateRecords,
       invalidFilesRejected: invalidFiles,
       unavailableFiles: unavailableFiles,
       unsupportedFiles: unsupportedFiles,
+      unavailableDirectories: unavailableDirectories,
       filesExamined: filesExamined,
       directoriesExamined: directoriesExamined,
+      rootDirectoriesOpened: rootDirectoriesOpened,
+      signatureFilesInspected: signatureFilesInspected,
       entriesExamined: entriesExamined,
       currentFilesSkipped: currentFilesSkipped,
       signatureCacheHits: signatureCacheHits,
@@ -335,8 +410,46 @@ class DeepRecoveryEngine {
       duplicateDirectorySkips: duplicateDirectorySkips,
       repeatedCursorDetections: repeatedCursorDetections,
       completionReason: completionReason ?? 'exhausted',
+      failureAvailability: failureAvailability,
+      failureMessage: failureMessage,
     );
   }
+
+  bool _isPossibleCopy(DeepRecoveryDisposition disposition) =>
+      disposition == DeepRecoveryDisposition.possibleFullQualityCopy ||
+      disposition == DeepRecoveryDisposition.possibleLowerQualityCopy ||
+      disposition == DeepRecoveryDisposition.possibleUnknownQualityCopy ||
+      disposition == DeepRecoveryDisposition.thumbnailCopy;
+
+  bool _isHighValueArtifact(DeepRecoveryDiscoveryRecord record) {
+    final evidence = record.candidate.discoveryEvidence;
+    return record.candidate.deletionEvidence.reasons.contains(
+          DeletionEvidenceReason.systemTrashRecord,
+        ) ||
+        evidence.isTrashLike ||
+        evidence.isCacheLike ||
+        evidence.isRecoveryCopyLike ||
+        evidence.isThumbnailLike ||
+        evidence.isEmbeddedPayload ||
+        record.hasStrongCopyRelationship;
+  }
+
+  bool _isRecoveryRelevantArtifact(DeepRecoveryDiscoveryRecord record) {
+    final evidence = record.candidate.discoveryEvidence;
+    return evidence.isTrashLike ||
+        evidence.isCacheLike ||
+        evidence.isRecoveryCopyLike ||
+        evidence.isThumbnailLike ||
+        evidence.isEmbeddedPayload ||
+        evidence.isHidden ||
+        record.hasStrongCopyRelationship;
+  }
+
+  static const int _maximumRetainedRecords = 10000;
+  static const int _reservedLateArtifactSlots = 1000;
+  static const int _maximumRetainedExistingRecords = 256;
+  static const int _maximumRetainedNonCandidates = 256;
+  static const int _maximumRetainedGenericCopies = 2000;
 
   String _stableKey(MediaCandidate candidate) {
     final uri = candidate.contentUri ?? candidate.documentUri;
@@ -346,32 +459,6 @@ class DeepRecoveryEngine {
     if (volume != null && id != null) return 'media:$volume:$id';
     return 'candidate:${candidate.id}';
   }
-
-  DeepRecoveryEngineResult _cancelled(
-    Set<DeepRecoveryProviderKind> visited,
-    int discovered,
-    int duplicates,
-    int invalid,
-    int unavailable,
-    int filesExamined,
-    int directoriesExamined,
-    Set<String> volumesScanned,
-  ) => DeepRecoveryEngineResult(
-    completed: false,
-    byDisposition: const {},
-    possibleCopies: const PossibleCopiesDiscoveryResult(
-      groups: [],
-      verifiedDeletedCount: 0,
-    ),
-    providersVisited: Set.unmodifiable(visited),
-    recordsDiscovered: discovered,
-    duplicateRecordsSuppressed: duplicates,
-    invalidFilesRejected: invalid,
-    unavailableFiles: unavailable,
-    filesExamined: filesExamined,
-    directoriesExamined: directoriesExamined,
-    volumesScanned: Set.unmodifiable(volumesScanned),
-  );
 }
 
 class DeepRecoveryEngineProgress {
@@ -383,6 +470,7 @@ class DeepRecoveryEngineProgress {
     this.pageFilesExamined = 0,
     this.pageDirectoriesConsumed = 0,
     this.pageRecordsReturned = 0,
+    this.unavailableDirectories = 0,
     this.remainingDirectoryQueue = 0,
     this.visitedDirectoryCount = 0,
     this.duplicateDirectorySkips = 0,
@@ -391,6 +479,7 @@ class DeepRecoveryEngineProgress {
     this.completionReason,
     this.cursorIdentifier,
     this.currentArea,
+    this.possibleCopyCandidates = const [],
   });
   final int pageCount;
   final int filesExamined;
@@ -399,6 +488,7 @@ class DeepRecoveryEngineProgress {
   final int pageFilesExamined;
   final int pageDirectoriesConsumed;
   final int pageRecordsReturned;
+  final int unavailableDirectories;
   final int remainingDirectoryQueue;
   final int visitedDirectoryCount;
   final int duplicateDirectorySkips;
@@ -407,4 +497,5 @@ class DeepRecoveryEngineProgress {
   final String? completionReason;
   final String? cursorIdentifier;
   final String? currentArea;
+  final List<MediaCandidate> possibleCopyCandidates;
 }

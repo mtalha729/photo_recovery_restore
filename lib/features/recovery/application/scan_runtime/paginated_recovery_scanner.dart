@@ -9,6 +9,7 @@ typedef RecoveryPageConsumer = Future<void> Function(
   VerifiedSourceRecoverySuccess page,
 );
 typedef ScanProgressListener = void Function(RecoveryScanProgress progress);
+typedef ScanStopAfterPage = bool Function();
 
 enum RecoveryScanCompletion { completed, cancelled, unsupported, failed }
 
@@ -39,10 +40,14 @@ class RecoveryScanSummary {
 }
 
 class PaginatedRecoveryScanner {
-  const PaginatedRecoveryScanner({this.maximumPageSize = 200})
-    : assert(maximumPageSize > 0);
+  const PaginatedRecoveryScanner({
+    this.maximumPageSize = 200,
+    this.maximumPageCount = 1000,
+  }) : assert(maximumPageSize > 0),
+       assert(maximumPageCount > 0);
 
   final int maximumPageSize;
+  final int maximumPageCount;
 
   Future<RecoveryScanSummary> scan({
     required int pageSize,
@@ -50,6 +55,7 @@ class PaginatedRecoveryScanner {
     required RecoveryPageConsumer consumePage,
     required ScanCancellationToken cancellationToken,
     ScanProgressListener? onProgress,
+    ScanStopAfterPage? shouldStopAfterPage,
   }) async {
     if (pageSize <= 0 || pageSize > maximumPageSize) {
       throw ArgumentError.value(pageSize, 'pageSize');
@@ -77,25 +83,33 @@ class PaginatedRecoveryScanner {
           continuationToken: continuationToken,
         ),
       );
-      if (cancellationToken.isCancelled) {
-        return RecoveryScanSummary(
-          completion: RecoveryScanCompletion.cancelled,
-          progress: progress,
-        );
-      }
       switch (result) {
         case VerifiedSourceRecoveryUnsupported():
+          if (cancellationToken.isCancelled) {
+            return RecoveryScanSummary(
+              completion: RecoveryScanCompletion.cancelled,
+              progress: progress,
+            );
+          }
           return RecoveryScanSummary(
             completion: RecoveryScanCompletion.unsupported,
             progress: progress,
           );
         case VerifiedSourceRecoveryFailure failure:
           return RecoveryScanSummary(
-            completion: RecoveryScanCompletion.failed,
+            completion: cancellationToken.isCancelled
+                ? RecoveryScanCompletion.cancelled
+                : RecoveryScanCompletion.failed,
             progress: progress,
-            failure: failure,
+            failure: cancellationToken.isCancelled ? null : failure,
           );
         case VerifiedSourceRecoverySuccess success:
+          if (cancellationToken.isCancelled) {
+            return RecoveryScanSummary(
+              completion: RecoveryScanCompletion.cancelled,
+              progress: progress,
+            );
+          }
           await consumePage(success);
           progress = RecoveryScanProgress(
             processedCount:
@@ -105,6 +119,28 @@ class PaginatedRecoveryScanner {
                 progress.discoveredVerifiedCount + success.items.length,
           );
           onProgress?.call(progress);
+          // Providers are paged, so give the UI isolate a turn after every
+          // published batch. This keeps initial results and cancellation
+          // responsive even while a long source has more pages available.
+          await Future<void>.delayed(Duration.zero);
+          if (cancellationToken.isCancelled) {
+            return RecoveryScanSummary(
+              completion: RecoveryScanCompletion.cancelled,
+              progress: progress,
+            );
+          }
+          if (shouldStopAfterPage?.call() == true) {
+            return RecoveryScanSummary(
+              completion: RecoveryScanCompletion.failed,
+              progress: progress,
+              failure: VerifiedSourceRecoveryFailure(
+                source: success.source,
+                code: VerifiedSourceRecoveryFailureCode.resourceLimit,
+                message:
+                    'Recovery stopped at the safe verified-result memory limit; earlier results are retained and coverage is partial.',
+              ),
+            );
+          }
           final nextToken = success.nextContinuationToken;
           final nextId = success.nextAfterMediaStoreId;
           if (nextToken == null && nextId == null) {
@@ -113,11 +149,29 @@ class PaginatedRecoveryScanner {
               progress: progress,
             );
           }
+          if (progress.pageCount >= maximumPageCount) {
+            return RecoveryScanSummary(
+              completion: RecoveryScanCompletion.failed,
+              progress: progress,
+              failure: VerifiedSourceRecoveryFailure(
+                source: success.source,
+                code: VerifiedSourceRecoveryFailureCode.resourceLimit,
+                message:
+                    'Recovery reached the $maximumPageCount-page safety limit; coverage is partial.',
+              ),
+            );
+          }
           final continuationKey = nextToken ?? 'legacy:$nextId';
           if (!seenContinuations.add(continuationKey)) {
             return RecoveryScanSummary(
-              completion: RecoveryScanCompletion.completed,
+              completion: RecoveryScanCompletion.failed,
               progress: progress,
+              failure: VerifiedSourceRecoveryFailure(
+                source: success.source,
+                code: VerifiedSourceRecoveryFailureCode.platformFailure,
+                message:
+                    'Recovery pagination repeated a continuation state; coverage is partial.',
+              ),
             );
           }
           continuationToken = nextToken;

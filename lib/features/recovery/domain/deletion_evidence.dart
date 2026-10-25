@@ -1,7 +1,6 @@
 enum DeletionEvidenceReason {
   systemTrashRecord,
   sourceNoLongerAvailable,
-  recoveryShieldRecord,
   userSelectedDeletedLocation,
   externalStorageRecord,
 }

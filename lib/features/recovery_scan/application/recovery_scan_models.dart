@@ -8,8 +8,7 @@ enum RecoveryScanSource {
   messaging(MediaSource.messagingSharedMedia, 'Messaging'),
   screenshots(MediaSource.screenshots, 'Screenshots'),
   downloads(MediaSource.downloadsSavedMedia, 'Downloads'),
-  sdCard(MediaSource.sdCard, 'SD Card & Other Folders'),
-  customFolder(MediaSource.customFolder, 'Selected Folder');
+  sdCard(MediaSource.sdCard, 'SD Card');
 
   const RecoveryScanSource(this.mediaSource, this.label);
   final MediaSource mediaSource;
@@ -21,8 +20,11 @@ enum RecoveryScanViewStatus {
   running,
   cancelling,
   cancelled,
+  partial,
   complete,
+  completeRestricted,
   empty,
+  emptyRestricted,
   unsupported,
   accessUnavailable,
   deepAccessRequired,
@@ -40,6 +42,7 @@ class RecoveryScanViewState {
     ),
     this.verifiedItems = const [],
     this.possibleCopies = const [],
+    this.existingPhotos = const [],
     this.message,
     this.isLimitedAccess = false,
     this.deepCapabilityMessage,
@@ -54,6 +57,7 @@ class RecoveryScanViewState {
   final RecoveryScanProgress progress;
   final List<MediaCandidate> verifiedItems;
   final List<MediaCandidate> possibleCopies;
+  final List<MediaCandidate> existingPhotos;
   final String? message;
   final bool isLimitedAccess;
   final String? deepCapabilityMessage;
@@ -67,6 +71,7 @@ class RecoveryScanViewState {
     RecoveryScanProgress? progress,
     List<MediaCandidate>? verifiedItems,
     List<MediaCandidate>? possibleCopies,
+    List<MediaCandidate>? existingPhotos,
     String? message,
     bool? isLimitedAccess,
     String? deepCapabilityMessage,
@@ -80,6 +85,7 @@ class RecoveryScanViewState {
     progress: progress ?? this.progress,
     verifiedItems: verifiedItems ?? this.verifiedItems,
     possibleCopies: possibleCopies ?? this.possibleCopies,
+    existingPhotos: existingPhotos ?? this.existingPhotos,
     message: message ?? this.message,
     isLimitedAccess: isLimitedAccess ?? this.isLimitedAccess,
     deepCapabilityMessage: deepCapabilityMessage ?? this.deepCapabilityMessage,

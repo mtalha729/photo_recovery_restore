@@ -16,6 +16,10 @@ class PlatformFolderScopeSelector implements FolderScopeSelector {
   Future<FolderScopeSelectionResult> selectFolder() => _invoke('selectFolder');
 
   @override
+  Future<FolderScopeSelectionResult> selectDestinationFolder() =>
+      _invoke('selectDestinationFolder');
+
+  @override
   Future<FolderScopeSelectionResult> checkGrant(AuthorizedFolderScope scope) =>
       _invoke('checkFolderGrant', {'treeUri': scope.treeUri.toString()});
 

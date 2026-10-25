@@ -8,6 +8,7 @@ import 'package:photo_recovery_restore/features/recovery/domain/deletion_evidenc
 import 'package:photo_recovery_restore/features/recovery/domain/media_candidate.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/media_source.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_classification.dart';
+import 'package:photo_recovery_restore/features/recovery/domain/recovery_discovery_evidence.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/recovery_quality.dart';
 import 'package:photo_recovery_restore/features/recovery/domain/restore_capability.dart';
 
@@ -50,6 +51,7 @@ void main() {
 
   MediaCandidate candidate({
     Uri? uri,
+    Uri? documentUri,
     int? mediaStoreId,
     String? volume,
     String? name,
@@ -66,6 +68,7 @@ void main() {
       id: 'candidate',
       source: MediaSource.unknown,
       contentUri: uri,
+      documentUri: documentUri,
       mediaStoreId: mediaStoreId,
       storageVolumeName: volume,
       displayName: name,
@@ -94,6 +97,23 @@ void main() {
     expect(decision.match?.record.mediaStoreId, 1);
   });
 
+  test('exact SAF document URI is excluded when indexed as current media', () {
+    final documentUri = Uri.parse(
+      'content://provider/tree/primary%3APictures/document/primary%3APictures%2Fphoto.jpg',
+    );
+    final index = ExistingMediaIndex.build(
+      records: [record(101, uri: documentUri)],
+    );
+
+    final decision = engine.evaluate(
+      candidate(documentUri: documentUri),
+      index,
+    );
+
+    expect(decision.type, ExistingMediaDecisionType.definitelyExisting);
+    expect(decision.excludesFromDeletedResults, isTrue);
+  });
+
   test('same MediaStore ID and volume is definitely existing', () {
     final index = ExistingMediaIndex.build(
       records: [record(2)],
@@ -106,6 +126,149 @@ void main() {
     );
 
     expect(decision.type, ExistingMediaDecisionType.definitelyExisting);
+  });
+
+  test('inventory fields exclude an exact current file without enrichment', () {
+    const current = CurrentMediaRecord(
+      mediaStoreId: 21,
+      storageVolumeName: 'external_primary',
+      displayName: 'current.jpg',
+      mimeType: 'image/jpeg',
+      byteSize: 4096,
+      width: 1200,
+      height: 800,
+      relativePath: 'DCIM/Camera/',
+    );
+    final index = ExistingMediaIndex.build(records: [current]);
+
+    final decision = engine.evaluate(
+      candidate(
+        volume: 'external_primary',
+        relativeLocation: 'DCIM/Camera',
+        name: 'current.jpg',
+        size: 4096,
+      ),
+      index,
+    );
+
+    expect(decision.type, ExistingMediaDecisionType.definitelyExisting);
+  });
+
+  test(
+    'validated indexed cache is eligible but an uninspected cache is not',
+    () {
+      const cached = CurrentMediaRecord(
+        mediaStoreId: 23,
+        storageVolumeName: 'external_primary',
+        relativePath: 'Pictures/.cache/',
+        displayName: 'preview.jpg',
+        byteSize: 1024,
+      );
+      final index = ExistingMediaIndex.build(records: [cached]);
+      MediaCandidate cacheCandidate(RecoveryDiscoveryEvidence evidence) =>
+          MediaCandidate(
+            id: 'cache',
+            source: MediaSource.cameraGallery,
+            filePath: '/storage/emulated/0/Pictures/.cache/preview.jpg',
+            displayName: 'preview.jpg',
+            relativeLocation: 'Pictures/.cache/',
+            storageVolumeName: 'external_primary',
+            byteSize: 1024,
+            classification: RecoveryClassification.possibleCopy,
+            deletionEvidence: DeletionEvidence(),
+            discoveryEvidence: evidence,
+            restoreCapability: RestoreCapability.unknownQualityCopy,
+            recoveryQuality: RecoveryQuality.unknownQualityCopy,
+          );
+
+      expect(
+        index.storageLocationKeys,
+        contains('external_primary|pictures/.cache|preview.jpg|1024'),
+      );
+      expect(index.ordinaryStorageLocationKeys, isEmpty);
+      expect(
+        engine
+            .evaluate(
+              cacheCandidate(
+                const RecoveryDiscoveryEvidence(
+                  isCacheLike: true,
+                  detectedFormat: 'jpeg',
+                ),
+              ),
+              index,
+            )
+            .type,
+        ExistingMediaDecisionType.noExistingMatch,
+      );
+      expect(
+        engine
+            .evaluate(
+              cacheCandidate(
+                const RecoveryDiscoveryEvidence(isCacheLike: true),
+              ),
+              index,
+            )
+            .type,
+        ExistingMediaDecisionType.definitelyExisting,
+      );
+    },
+  );
+
+  test(
+    'current file path keys match the native case-insensitive prefilter',
+    () {
+      const current = CurrentMediaRecord(
+        mediaStoreId: 42,
+        storageVolumeName: 'external_primary',
+        displayName: 'Current.JPG',
+        byteSize: 4096,
+        relativePath: 'DCIM/Camera/',
+      );
+      final index = ExistingMediaIndex.build(records: [current]);
+
+      expect(
+        index.storageLocationKeys,
+        contains('external_primary|dcim/camera|current.jpg|4096'),
+      );
+      expect(
+        engine
+            .evaluate(
+              candidate(
+                volume: 'EXTERNAL_PRIMARY',
+                relativeLocation: 'dcim/camera',
+                name: 'current.jpg',
+                size: 4096,
+              ),
+              index,
+            )
+            .type,
+        ExistingMediaDecisionType.definitelyExisting,
+      );
+    },
+  );
+
+  test('same numeric ID metadata from another volume is not borrowed', () {
+    const current = CurrentMediaRecord(
+      mediaStoreId: 30,
+      storageVolumeName: 'external_primary',
+      displayName: 'primary.jpg',
+    );
+    final index = ExistingMediaIndex.build(
+      records: [current],
+      metadata: [metadata(30, name: 'removable.jpg', volume: '1234-5678')],
+    );
+
+    final decision = engine.evaluate(
+      candidate(
+        volume: '1234-5678',
+        relativeLocation: 'DCIM/Camera',
+        name: 'removable.jpg',
+        size: 4096,
+      ),
+      index,
+    );
+
+    expect(decision.type, isNot(ExistingMediaDecisionType.definitelyExisting));
   });
 
   test('exact volume path name and size excludes a direct-file discovery', () {
@@ -183,6 +346,82 @@ void main() {
     );
 
     expect(decision.type, ExistingMediaDecisionType.definitelyExisting);
+  });
+
+  test('matching metadata on another volume does not hide an SD-card copy', () {
+    final index = ExistingMediaIndex.build(
+      records: [record(60)],
+      metadata: [metadata(60, volume: 'external_primary')],
+    );
+
+    final decision = engine.evaluate(
+      candidate(
+        volume: '1234-5678',
+        name: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        size: 4096,
+        width: 1200,
+        height: 800,
+        relativeLocation: 'DCIM/Camera/',
+        classification: RecoveryClassification.possibleCopy,
+      ),
+      index,
+    );
+
+    expect(decision.excludesFromDeletedResults, isFalse);
+    expect(decision.type, isNot(ExistingMediaDecisionType.definitelyExisting));
+  });
+
+  test(
+    'separate thumbnail location is not excluded by its existing original',
+    () {
+      final index = ExistingMediaIndex.build(
+        records: [record(61, name: 'photo.jpg')],
+        metadata: [metadata(61)],
+      );
+      final decision = engine.evaluate(
+        candidate(
+          volume: 'external_primary',
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          size: 1024,
+          width: 256,
+          height: 170,
+          relativeLocation: 'DCIM/.thumbnails/',
+          classification: RecoveryClassification.possibleCopy,
+        ),
+        index,
+      );
+
+      expect(decision.excludesFromDeletedResults, isFalse);
+      expect(
+        decision.type,
+        isNot(ExistingMediaDecisionType.definitelyExisting),
+      );
+    },
+  );
+
+  test('separate same-size copy is not mistaken for the original file', () {
+    final index = ExistingMediaIndex.build(
+      records: [record(62, name: 'photo.jpg')],
+      metadata: [metadata(62)],
+    );
+    final decision = engine.evaluate(
+      candidate(
+        volume: 'external_primary',
+        name: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        size: 4096,
+        width: 1200,
+        height: 800,
+        relativeLocation: 'Pictures/Recovered/',
+        classification: RecoveryClassification.possibleCopy,
+      ),
+      index,
+    );
+
+    expect(decision.excludesFromDeletedResults, isFalse);
+    expect(decision.type, isNot(ExistingMediaDecisionType.definitelyExisting));
   });
 
   test('ambiguous strong composite identity remains uncertain', () {

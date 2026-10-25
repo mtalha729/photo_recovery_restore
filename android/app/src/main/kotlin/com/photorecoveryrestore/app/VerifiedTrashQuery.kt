@@ -10,6 +10,7 @@ import android.provider.MediaStore
 class VerifiedTrashQuery(private val context: Context) {
     private val contentResolver: ContentResolver
         get() = context.contentResolver
+    private val signatureInspector = ImageSignatureInspector(contentResolver)
 
     fun query(
         pageSize: Int,
@@ -31,6 +32,9 @@ class VerifiedTrashQuery(private val context: Context) {
         ) ?: return failure("platformFailure", "Invalid trash continuation.")
 
         return try {
+            var invalidFilesRejected = 0
+            var inaccessibleFiles = 0
+            var rawRowsExamined = 0
             while (cursorState.volumeIndex < volumes.size) {
                 val volumeName = volumes[cursorState.volumeIndex]
                 val page = queryVolume(
@@ -39,22 +43,41 @@ class VerifiedTrashQuery(private val context: Context) {
                     afterId = cursorState.afterId,
                     isRemovable = removableVolumeNames.contains(volumeName),
                 )
-                if (page.items.isNotEmpty()) {
+                invalidFilesRejected += page.invalidFilesRejected
+                inaccessibleFiles += page.inaccessibleFiles
+                rawRowsExamined += page.rawRowsExamined
+                if (page.items.isNotEmpty() || page.hasMore) {
                     val nextToken = if (page.hasMore) {
+                        val lastExaminedId = page.lastExaminedId
+                            ?: return failure("platformFailure", "Trash pagination made no progress.")
                         MediaStoreVolumePaging.token(
                             cursorState.volumeIndex,
-                            page.items.last().getValue("mediaStoreId") as Long,
+                            lastExaminedId,
                         )
                     } else if (cursorState.volumeIndex + 1 < volumes.size) {
                         MediaStoreVolumePaging.token(cursorState.volumeIndex + 1, 0L)
                     } else {
                         null
                     }
-                    return success(page.items, nextToken, volumeName)
+                    return success(
+                        page.items,
+                        nextToken,
+                        volumeName,
+                        invalidFilesRejected,
+                        inaccessibleFiles,
+                        rawRowsExamined,
+                    )
                 }
                 cursorState = MediaStorePageCursor(cursorState.volumeIndex + 1, 0L)
             }
-            success(emptyList(), null, null)
+            success(
+                emptyList(),
+                null,
+                null,
+                invalidFilesRejected,
+                inaccessibleFiles,
+                rawRowsExamined,
+            )
         } catch (_: SecurityException) {
             failure("securityDenied", "Media trash access is unavailable.")
         } catch (_: Exception) {
@@ -90,48 +113,97 @@ class VerifiedTrashQuery(private val context: Context) {
                 arrayOf(afterId.toString()),
             )
         }
-        contentResolver.query(collection, projection, queryArguments, null)?.use { cursor ->
-            while (cursor.moveToNext() && items.size <= pageSize) {
-                if (cursor.getIntOrNull(MediaStore.MediaColumns.IS_TRASHED) != 1) continue
-                val id = cursor.getLongOrNull(MediaStore.Images.Media._ID) ?: continue
+        var rawRowsExamined = 0
+        var lastExaminedId: Long? = null
+        var hasMore = false
+        var invalidFilesRejected = 0
+        var inaccessibleFiles = 0
+        val cursor = contentResolver.query(collection, projection(), queryArguments, null)
+            ?: throw IllegalStateException("MediaStore returned no trash cursor.")
+        cursor.use { rows ->
+            while (rows.moveToNext()) {
+                if (rawRowsExamined >= pageSize) {
+                    hasMore = true
+                    break
+                }
+                rawRowsExamined++
+                val id = rows.getLongOrNull(MediaStore.Images.Media._ID)
+                    ?: throw IllegalStateException("MediaStore trash row has no ID.")
+                lastExaminedId = id
+                if (rows.getIntOrNull(MediaStore.MediaColumns.IS_TRASHED) != 1) continue
+                val contentUri = collection.buildUpon()
+                    .appendPath(id.toString())
+                    .build()
+                val declaredMime = rows.getStringOrNull(MediaStore.Images.Media.MIME_TYPE)
+                val signature = signatureInspector.inspect(contentUri)
+                if (signature.state == "unavailable") {
+                    inaccessibleFiles++
+                }
+                val identifiedImage = (signature.state == "valid" ||
+                    signature.state == "unsupported") &&
+                    !signature.format.isNullOrBlank() &&
+                    signature.mimeType?.startsWith("image/") == true
+                // Images.Media plus IS_TRASHED is authoritative even when an
+                // older row has no MIME value and its bytes cannot yet open.
+                val unreadableImageRow = signature.state == "unavailable" &&
+                    (declaredMime == null || declaredMime.startsWith("image/"))
+                if (!identifiedImage && !unreadableImageRow) {
+                    invalidFilesRejected++
+                    continue
+                }
                 items += mapOf(
                     "mediaStoreId" to id,
-                    "contentUri" to collection.buildUpon()
-                        .appendPath(id.toString())
-                        .build()
-                        .toString(),
-                    "displayName" to cursor.getStringOrNull(MediaStore.Images.Media.DISPLAY_NAME),
-                    "mimeType" to cursor.getStringOrNull(MediaStore.Images.Media.MIME_TYPE),
-                    "byteSize" to cursor.getLongOrNull(MediaStore.Images.Media.SIZE),
-                    "width" to cursor.getIntOrNull(MediaStore.Images.Media.WIDTH),
-                    "height" to cursor.getIntOrNull(MediaStore.Images.Media.HEIGHT),
-                    "dateTakenMillis" to cursor.getLongOrNull(MediaStore.Images.Media.DATE_TAKEN),
-                    "dateAddedSeconds" to cursor.getLongOrNull(MediaStore.Images.Media.DATE_ADDED),
-                    "dateModifiedSeconds" to cursor.getLongOrNull(MediaStore.Images.Media.DATE_MODIFIED),
-                    "relativePath" to cursor.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH),
-                    "bucketName" to cursor.getStringOrNull(MediaStore.Images.Media.BUCKET_DISPLAY_NAME),
-                    "orientationDegrees" to cursor.getIntOrNull(MediaStore.Images.Media.ORIENTATION),
+                    "contentUri" to contentUri.toString(),
+                    "displayName" to rows.getStringOrNull(MediaStore.Images.Media.DISPLAY_NAME),
+                    "mimeType" to (signature.mimeType ?: declaredMime),
+                    "initialBytesReadable" to identifiedImage,
+                    "byteSize" to rows.getLongOrNull(MediaStore.Images.Media.SIZE),
+                    "width" to (
+                        signature.width
+                            ?: rows.getIntOrNull(MediaStore.Images.Media.WIDTH)
+                    ),
+                    "height" to (
+                        signature.height
+                            ?: rows.getIntOrNull(MediaStore.Images.Media.HEIGHT)
+                    ),
+                    "dateTakenMillis" to rows.getLongOrNull(MediaStore.Images.Media.DATE_TAKEN),
+                    "dateAddedSeconds" to rows.getLongOrNull(MediaStore.Images.Media.DATE_ADDED),
+                    "dateModifiedSeconds" to rows.getLongOrNull(MediaStore.Images.Media.DATE_MODIFIED),
+                    "relativePath" to rows.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH),
+                    "bucketName" to rows.getStringOrNull(MediaStore.Images.Media.BUCKET_DISPLAY_NAME),
+                    "orientationDegrees" to rows.getIntOrNull(MediaStore.Images.Media.ORIENTATION),
                     "storageVolumeName" to volumeName,
                     "isRemovableStorage" to isRemovable,
                     "isTrashed" to true,
                 )
             }
         }
-        val hasMore = items.size > pageSize
-        if (hasMore) items.removeAt(items.lastIndex)
-        return VolumePage(items, hasMore)
+        return VolumePage(
+            items,
+            hasMore,
+            lastExaminedId,
+            invalidFilesRejected,
+            inaccessibleFiles,
+            rawRowsExamined,
+        )
     }
 
     private fun success(
         items: List<Map<String, Any?>>,
         nextContinuationToken: String?,
         scannedVolumeName: String?,
+        invalidFilesRejected: Int,
+        inaccessibleFiles: Int,
+        rawRowsExamined: Int,
     ): Map<String, Any?> = mapOf(
         "status" to "success",
         "items" to items,
         "nextAfterMediaStoreId" to null,
         "nextContinuationToken" to nextContinuationToken,
         "scannedVolumeName" to scannedVolumeName,
+        "invalidFilesRejected" to invalidFilesRejected,
+        "inaccessibleFiles" to inaccessibleFiles,
+        "rawRowsExamined" to rawRowsExamined,
     )
 
     private fun failure(code: String, message: String): Map<String, Any?> =
@@ -165,10 +237,17 @@ class VerifiedTrashQuery(private val context: Context) {
     private data class VolumePage(
         val items: MutableList<Map<String, Any?>>,
         val hasMore: Boolean,
+        val lastExaminedId: Long?,
+        val invalidFilesRejected: Int,
+        val inaccessibleFiles: Int,
+        val rawRowsExamined: Int,
     )
 
     companion object {
-        private val projection = arrayOf(
+        // This projection is only reached after the API 30 guard in query().
+        // Keep API 30-only column references out of static class initialization
+        // so Android 8–10 can return the supported/unsupported result safely.
+        private fun projection(): Array<String> = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.MIME_TYPE,

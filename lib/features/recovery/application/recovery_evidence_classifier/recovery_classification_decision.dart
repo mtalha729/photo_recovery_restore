@@ -3,7 +3,7 @@ import '../../domain/recovery_classification.dart';
 
 enum RecoveryClassificationReason {
   definiteExistingIdentity,
-  protectedDeletionEvidence,
+  protectedCopyEvidence,
   verifiedSystemTrashEvidence,
   explicitCorruptionState,
   explicitPossibleCopyState,
@@ -23,8 +23,10 @@ class RecoveryClassificationDecision {
   final Set<DeletionEvidenceReason> deletionEvidence;
 
   bool get isEligibleForVerifiedDeletedResults =>
-      classification == RecoveryClassification.verifiedDeleted ||
-      classification == RecoveryClassification.protectedDeleted;
+      classification == RecoveryClassification.verifiedDeleted;
+
+  bool get isProtectedCopy =>
+      classification == RecoveryClassification.protectedCopy;
 
   bool get belongsOnlyInPossibleCopies =>
       classification == RecoveryClassification.possibleCopy;
@@ -34,8 +36,5 @@ class RecoveryClassificationDecision {
 
   bool get hasContradictoryDeletionEvidence =>
       mustBeExcludedFromRecoveryResults &&
-      (deletionEvidence.contains(DeletionEvidenceReason.systemTrashRecord) ||
-          deletionEvidence.contains(
-            DeletionEvidenceReason.recoveryShieldRecord,
-          ));
+      deletionEvidence.contains(DeletionEvidenceReason.systemTrashRecord);
 }

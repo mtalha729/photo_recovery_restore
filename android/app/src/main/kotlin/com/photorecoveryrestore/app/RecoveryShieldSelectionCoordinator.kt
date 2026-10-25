@@ -5,15 +5,18 @@ import android.content.Intent
 import android.provider.OpenableColumns
 import io.flutter.plugin.common.MethodChannel
 import java.util.UUID
+import java.util.concurrent.Executor
 
 class RecoveryShieldSelectionCoordinator(
     private val activity: Activity,
     private val storage: RecoveryShieldStorage,
+    private val executor: Executor,
 ) {
     private var pending: MethodChannel.Result? = null
+    @Volatile private var disposed = false
 
     fun select(result: MethodChannel.Result) {
-        if (pending != null) {
+        if (disposed || pending != null) {
             result.success(0)
             return
         }
@@ -43,51 +46,72 @@ class RecoveryShieldSelectionCoordinator(
                 for (index in 0 until clip.itemCount) add(clip.getItemAt(index).uri)
             }
         }.distinct()
-        var protectedCount = 0
-        uris.forEach { uri ->
-            try {
-                activity.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: Exception) {
-                // The one-time activity grant is still sufficient for this copy operation.
-            }
-            var displayName: String? = null
-            var byteSize: Long? = null
-            try {
-                activity.contentResolver.query(
-                    uri,
-                    arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
-                    null,
-                    null,
-                    null,
-                )?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        if (!cursor.isNull(0)) displayName = cursor.getString(0)
-                        if (!cursor.isNull(1)) byteSize = cursor.getLong(1)
+        if (result == null || disposed) return true
+        try {
+            executor.execute {
+                var protectedCount = 0
+                for (uri in uris) {
+                    if (Thread.currentThread().isInterrupted) break
+                    try {
+                        try {
+                            activity.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                            )
+                        } catch (_: Exception) {
+                            // The one-time activity grant is still enough to copy now.
+                        }
+                        var displayName: String? = null
+                        var byteSize: Long? = null
+                        try {
+                            activity.contentResolver.query(
+                                uri,
+                                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                                null,
+                                null,
+                                null,
+                            )?.use { cursor ->
+                                if (cursor.moveToFirst()) {
+                                    if (!cursor.isNull(0)) displayName = cursor.getString(0)
+                                    if (!cursor.isNull(1)) byteSize = cursor.getLong(1)
+                                }
+                            }
+                        } catch (_: Exception) {
+                            // Optional picker metadata remains unknown.
+                        }
+                        val id = UUID.nameUUIDFromBytes(uri.toString().toByteArray()).toString()
+                        val response = storage.protect(
+                            mapOf(
+                                "protectionId" to id,
+                                "sourceUri" to uri.toString(),
+                                "stableSourceIdentity" to "document:$uri",
+                                "originalContentUri" to uri.toString(),
+                                "source" to "unknown",
+                                "displayName" to displayName,
+                                "mimeType" to activity.contentResolver.getType(uri),
+                                "expectedByteSize" to byteSize,
+                            ),
+                        )
+                        if (response["status"] in setOf("protected", "alreadyProtected", "updated")) {
+                            protectedCount++
+                        }
+                    } catch (_: Exception) {
+                        // One inaccessible selection does not discard other selected files.
                     }
                 }
-            } catch (_: Exception) {
-                // Optional picker metadata remains unknown.
+                val count = protectedCount
+                activity.runOnUiThread {
+                    if (!disposed) result.success(count)
+                }
             }
-            val id = UUID.nameUUIDFromBytes(uri.toString().toByteArray()).toString()
-            val response = storage.protect(
-                mapOf(
-                    "protectionId" to id,
-                    "sourceUri" to uri.toString(),
-                    "stableSourceIdentity" to "document:$uri",
-                    "originalContentUri" to uri.toString(),
-                    "source" to "unknown",
-                    "displayName" to displayName,
-                    "mimeType" to activity.contentResolver.getType(uri),
-                    "expectedByteSize" to byteSize,
-                ),
-            )
-            if (response["status"] in setOf("protected", "alreadyProtected", "updated")) protectedCount++
+        } catch (_: Exception) {
+            if (!disposed) result.success(0)
         }
-        result?.success(protectedCount)
         return true
     }
 
     fun dispose() {
+        disposed = true
         pending?.success(0)
         pending = null
     }

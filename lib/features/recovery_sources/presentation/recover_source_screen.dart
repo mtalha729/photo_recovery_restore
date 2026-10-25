@@ -124,7 +124,7 @@ class _RecoverySourceCard extends StatelessWidget {
     RecoverySourceIntent.cameraGallery => AppColors.primary,
     RecoverySourceIntent.messaging => AppColors.accent,
     RecoverySourceIntent.screenshotsDownloads => AppColors.protection,
-    RecoverySourceIntent.scopedFolders => AppColors.warning,
+    RecoverySourceIntent.sdCard => AppColors.warning,
   };
 
   @override

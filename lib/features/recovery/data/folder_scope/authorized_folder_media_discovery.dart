@@ -7,6 +7,7 @@ class AuthorizedFolderMediaRecord {
     this.mimeType,
     this.declaredMimeType,
     this.detectedFormat,
+    this.relativeLocation,
     this.byteSize,
     this.modifiedAt,
   });
@@ -16,6 +17,7 @@ class AuthorizedFolderMediaRecord {
   final String? mimeType;
   final String? declaredMimeType;
   final String? detectedFormat;
+  final String? relativeLocation;
   final int? byteSize;
   final DateTime? modifiedAt;
 }
@@ -29,7 +31,10 @@ class AuthorizedFolderMediaPage {
     this.skippedNonImages = 0,
     this.invalidFilesRejected = 0,
     this.unavailableFiles = 0,
+    this.unavailableDirectories = 0,
     this.unsupportedFiles = 0,
+    this.providerExhausted = false,
+    this.completionReason,
   });
 
   final List<AuthorizedFolderMediaRecord> items;
@@ -39,12 +44,16 @@ class AuthorizedFolderMediaPage {
   final int skippedNonImages;
   final int invalidFilesRejected;
   final int unavailableFiles;
+  final int unavailableDirectories;
   final int unsupportedFiles;
+  final bool providerExhausted;
+  final String? completionReason;
   bool get mayHaveMore => nextContinuationToken != null;
 }
 
 enum AuthorizedFolderMediaFailureCode {
   permissionGrantLost,
+  cancelled,
   platformFailure,
   malformedPlatformResponse,
 }
@@ -70,6 +79,9 @@ abstract interface class AuthorizedFolderMediaDiscovery {
     required int pageSize,
     String? continuationToken,
   });
+
+  /// Cancels native cursor/traversal work; unsupported providers may no-op.
+  Future<void> cancelScan({String? continuationToken});
 }
 
 class PlatformAuthorizedFolderMediaDiscovery
@@ -114,12 +126,28 @@ class PlatformAuthorizedFolderMediaDiscovery
     }
   }
 
+  @override
+  Future<void> cancelScan({String? continuationToken}) async {
+    try {
+      await _channel.invokeMethod<void>('cancelAuthorizedFolderScan', {
+        'continuationToken': continuationToken,
+      });
+    } on PlatformException {
+      // The Dart cancellation token remains authoritative if native cancellation
+      // is unavailable; this call only closes a live provider cursor promptly.
+    } on MissingPluginException {
+      // Older platform implementations can still stop between pages.
+    }
+  }
+
   static AuthorizedFolderMediaResult mapResponse(Object? response) {
     if (response is! Map<Object?, Object?>) return _malformed();
     if (response['status'] == 'failure') {
       return AuthorizedFolderMediaFailure(
         response['code'] == 'permissionGrantLost'
             ? AuthorizedFolderMediaFailureCode.permissionGrantLost
+            : response['code'] == 'cancelled'
+            ? AuthorizedFolderMediaFailureCode.cancelled
             : AuthorizedFolderMediaFailureCode.platformFailure,
         message: response['message'] is String
             ? response['message']! as String
@@ -148,6 +176,7 @@ class PlatformAuthorizedFolderMediaDiscovery
           mimeType: _text(raw['mimeType']),
           declaredMimeType: _text(raw['declaredMimeType']),
           detectedFormat: _text(raw['detectedFormat']),
+          relativeLocation: _text(raw['relativeLocation']),
           byteSize: raw['byteSize'] is int && (raw['byteSize']! as int) >= 0
               ? raw['byteSize']! as int
               : null,
@@ -171,7 +200,12 @@ class PlatformAuthorizedFolderMediaDiscovery
         skippedNonImages: _nonNegativeInt(response['skippedNonImages']),
         invalidFilesRejected: _nonNegativeInt(response['invalidFilesRejected']),
         unavailableFiles: _nonNegativeInt(response['unavailableFiles']),
+        unavailableDirectories: _nonNegativeInt(
+          response['unavailableDirectories'],
+        ),
         unsupportedFiles: _nonNegativeInt(response['unsupportedFiles']),
+        providerExhausted: response['providerExhausted'] == true,
+        completionReason: _text(response['completionReason']),
       ),
     );
   }

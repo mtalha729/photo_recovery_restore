@@ -58,7 +58,9 @@ class _PhotoRecoveryAccessScreenState extends State<PhotoRecoveryAccessScreen>
   Future<void> _checkAfterSettings() async {
     _returnedFromSettings = false;
     final capability = await widget.provider.getCapability();
-    if (!mounted || !capability.available) return;
+    if (!mounted || capability.mode != DeepStorageAccessMode.allFilesAccess) {
+      return;
+    }
     widget.onAccessAvailable();
   }
 

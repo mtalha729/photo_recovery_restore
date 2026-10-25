@@ -151,7 +151,9 @@ class VerifiedSourceRecoveryPipeline {
       classification: RecoveryClassification.unclassified,
       deletionEvidence: item.deletionEvidence,
       restoreCapability: RestoreCapability.originalFullQuality,
-      recoveryQuality: RecoveryQuality.original,
+      recoveryQuality: item.initialBytesReadable
+          ? RecoveryQuality.original
+          : RecoveryQuality.metadataOnly,
     );
   }
 

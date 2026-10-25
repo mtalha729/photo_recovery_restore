@@ -10,24 +10,47 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class RecoveryShieldStorage(private val context: Context) {
+    private val signatureInspector = ImageSignatureInspector(context.contentResolver)
+
     fun items(): List<Map<String, Any?>> {
         val root = root()
         return root.listFiles { file -> file.isFile && file.extension == "json" }
             ?.mapNotNull(::readManifest)
-            ?.map { metadata ->
-                val copy = File(metadata.optString("protectedCopyLocation"))
+            ?.mapNotNull { metadata ->
+                val protectionId = metadata.optString("protectionId")
+                    .takeIf { it.isNotBlank() && it != "null" } ?: return@mapNotNull null
+                val copyPath = metadata.optString("protectedCopyLocation")
+                val copy = runCatching { File(copyPath).canonicalFile }.getOrNull()
+                    ?: return@mapNotNull null
                 val size = metadata.optLong("byteSize", -1L)
-                val digest = metadata.optString("sha256Digest")
+                val digest = metadata.optString("sha256Digest").lowercase()
+                val signature = if (isInside(copy, root) && copy.isFile && copy.length() == size) {
+                    signatureInspector.inspect(copy)
+                } else null
+                val imageBytesValid = signature != null &&
+                    (signature.state == "valid" || signature.state == "unsupported") &&
+                    signature.format != null && signature.mimeType?.startsWith("image/") == true
+                val integrityVerified = imageBytesValid && digest.matches(Regex("[0-9a-f]{64}")) &&
+                    runCatching { digestFile(copy) == digest }.getOrDefault(false)
                 mapOf(
-                    "protectionId" to metadata.optString("protectionId"),
-                    "displayName" to metadata.optString("displayName").takeIf { it.isNotBlank() },
+                    "protectionId" to protectionId,
+                    "displayName" to metadata.optString("displayName").takeIf { it.isNotBlank() && it != "null" },
+                    "mimeType" to (signature?.mimeType ?: metadata.optString("mimeType").takeIf { it.isNotBlank() && it != "null" }),
                     "byteSize" to size.coerceAtLeast(0L),
-                    "integrityVerified" to (
-                        copy.isFile && copy.length() == size && digest.matches(Regex("[0-9a-fA-F]{64}"))
-                    ),
+                    "width" to (signature?.width ?: metadata.optInt("width", 0).takeIf { it > 0 }),
+                    "height" to (signature?.height ?: metadata.optInt("height", 0).takeIf { it > 0 }),
+                    "originalSource" to metadata.optString("originalSource").takeIf { it.isNotBlank() && it != "null" },
+                    "originalContentUri" to metadata.optString("originalContentUri").takeIf { it.isNotBlank() && it != "null" },
+                    "originalLocation" to metadata.optString("originalLocation").takeIf { it.isNotBlank() && it != "null" },
+                    "createdAtMillis" to metadata.optLong("createdAtMillis", 0L).takeIf { it > 0L },
+                    "modifiedAtMillis" to metadata.optLong("modifiedAtMillis", 0L).takeIf { it > 0L },
+                    "takenAtMillis" to metadata.optLong("takenAtMillis", 0L).takeIf { it > 0L },
+                    "protectedCopyLocation" to copy.absolutePath,
+                    "sha256Digest" to digest,
+                    "protectedAtMillis" to metadata.optLong("protectedAtMillis", 0L),
+                    "integrityVerified" to integrityVerified,
                 )
             }
-            ?.filter { (it["protectionId"] as? String).isNullOrBlank().not() }
             ?.sortedBy { it["protectionId"] as String }
             ?: emptyList()
     }
@@ -58,9 +81,32 @@ class RecoveryShieldStorage(private val context: Context) {
 
     private fun isInside(file: File, root: File): Boolean = try {
         file.canonicalPath.startsWith(root.canonicalPath + File.separator)
-    } catch (_: IOException) {
+    } catch (_: Exception) {
         false
     }
+
+    private fun isValidExistingCopy(
+        copy: File?,
+        root: File,
+        expectedSize: Long,
+        expectedDigest: String,
+    ): Boolean {
+        if (copy == null || !isInside(copy, root) || !copy.isFile ||
+            expectedSize < 0L || copy.length() != expectedSize ||
+            !expectedDigest.matches(Regex("[0-9a-f]{64}"))
+        ) return false
+        return try {
+            digestFile(copy) == expectedDigest &&
+                isValidatedImage(signatureInspector.inspect(copy))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isValidatedImage(signature: ImageSignatureResult): Boolean =
+        (signature.state == "valid" || signature.state == "unsupported") &&
+            !signature.format.isNullOrBlank() &&
+            signature.mimeType?.startsWith("image/") == true
 
     fun protect(arguments: Map<*, *>?): Map<String, Any?> {
         val protectionId = arguments?.get("protectionId") as? String
@@ -68,6 +114,19 @@ class RecoveryShieldStorage(private val context: Context) {
         val stableIdentity = arguments?.get("stableSourceIdentity") as? String
         if (protectionId.isNullOrBlank() || sourceUriText.isNullOrBlank() || stableIdentity.isNullOrBlank()) {
             return result("platformFailure", protectionId, "Invalid protection request.")
+        }
+        val sourceUri = runCatching { Uri.parse(sourceUriText) }.getOrNull()
+            ?.takeIf { it.scheme == "content" }
+            ?: return result("sourceUnavailable", protectionId, "The selected image source is unavailable.")
+        val sourceSignature = signatureInspector.inspect(sourceUri)
+        if (sourceSignature.state == "unavailable") {
+            return result("sourceUnavailable", protectionId, "The selected image bytes could not be read.")
+        }
+        if ((sourceSignature.state != "valid" && sourceSignature.state != "unsupported") ||
+            sourceSignature.format.isNullOrBlank() ||
+            sourceSignature.mimeType?.startsWith("image/") != true
+        ) {
+            return result("integrityFailure", protectionId, "The selected file is not a validated image.")
         }
 
         val root = root()
@@ -81,11 +140,16 @@ class RecoveryShieldStorage(private val context: Context) {
             ?.takeIf { it.isNotBlank() }
             ?.let(::File)
         val expectedDigest = (arguments["expectedSha256"] as? String)?.lowercase()
+        val previousCopyValid = isValidExistingCopy(
+            previousCopy,
+            root,
+            previous?.optLong("byteSize", -1L) ?: -1L,
+            previous?.optString("sha256Digest")?.lowercase().orEmpty(),
+        )
         if (expectedDigest != null &&
             previous?.optString("stableSourceIdentity") == stableIdentity &&
             previous.optString("sha256Digest").lowercase() == expectedDigest &&
-            previousCopy?.isFile == true &&
-            previousCopy.length() == previous.optLong("byteSize", -1L)) {
+            previousCopyValid) {
             return success("alreadyProtected", protectionId, previous)
         }
 
@@ -98,7 +162,7 @@ class RecoveryShieldStorage(private val context: Context) {
         return try {
             val digest = MessageDigest.getInstance("SHA-256")
             var copied = 0L
-            context.contentResolver.openInputStream(Uri.parse(sourceUriText))?.use { input ->
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 temporary.outputStream().buffered().use { output ->
                     val buffer = ByteArray(COPY_BUFFER_SIZE)
                     while (true) {
@@ -121,8 +185,32 @@ class RecoveryShieldStorage(private val context: Context) {
                 temporary.delete()
                 return result("integrityFailure", protectionId, "Protected-copy verification failed.")
             }
+            val copiedSignature = signatureInspector.inspect(temporary)
+            if ((copiedSignature.state != "valid" && copiedSignature.state != "unsupported") ||
+                copiedSignature.format.isNullOrBlank() ||
+                copiedSignature.mimeType?.startsWith("image/") != true
+            ) {
+                temporary.delete()
+                return result("integrityFailure", protectionId, "Copied bytes are not a validated image.")
+            }
 
             val protectedCopy = File(root, "$key-$actualDigest.bin")
+            if (protectedCopy.exists()) {
+                val existingCopyValid = isValidExistingCopy(
+                    protectedCopy,
+                    root,
+                    copied,
+                    actualDigest,
+                )
+                if (!existingCopyValid && !protectedCopy.delete()) {
+                    temporary.delete()
+                    return result(
+                        "platformFailure",
+                        protectionId,
+                        "Unable to replace a damaged protected copy.",
+                    )
+                }
+            }
             if (!protectedCopy.exists() && !temporary.renameTo(protectedCopy)) {
                 temporary.delete()
                 return result("platformFailure", protectionId, "Unable to publish protected copy.")
@@ -136,11 +224,11 @@ class RecoveryShieldStorage(private val context: Context) {
                 putNullable("originalContentUri", arguments["originalContentUri"])
                 putNullable("originalSource", arguments["source"])
                 putNullable("displayName", arguments["displayName"])
-                putNullable("mimeType", arguments["mimeType"])
+                putNullable("mimeType", copiedSignature.mimeType)
                 putNullable("originalLocation", arguments["originalLocation"])
                 put("byteSize", copied)
-                putNullable("width", arguments["width"])
-                putNullable("height", arguments["height"])
+                putNullable("width", copiedSignature.width ?: arguments["width"])
+                putNullable("height", copiedSignature.height ?: arguments["height"])
                 putNullable("createdAtMillis", arguments["createdAtMillis"])
                 putNullable("modifiedAtMillis", arguments["modifiedAtMillis"])
                 putNullable("takenAtMillis", arguments["takenAtMillis"])
@@ -221,6 +309,19 @@ class RecoveryShieldStorage(private val context: Context) {
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(bytes)
         .joinToString("") { "%02x".format(it) }
+
+    private fun digestFile(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(COPY_BUFFER_SIZE).use { input ->
+            val buffer = ByteArray(COPY_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (count > 0) digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun JSONObject.putNullable(name: String, value: Any?) {
         if (value != null) put(name, value)

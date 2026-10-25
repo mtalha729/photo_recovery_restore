@@ -35,6 +35,7 @@ internal object MediaStoreVolumePaging {
 class MultiVolumeCurrentMediaQuery(private val context: Context) {
     private val contentResolver: ContentResolver
         get() = context.contentResolver
+    private val signatureInspector = ImageSignatureInspector(contentResolver)
 
     fun query(
         pageSize: Int,
@@ -108,7 +109,7 @@ class MultiVolumeCurrentMediaQuery(private val context: Context) {
         val selection = "${MediaStore.Images.Media._ID} > ?"
         val selectionArgs = arrayOf(afterId.toString())
         val items = mutableListOf<Map<String, Any?>>()
-        val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val queryArguments = Bundle().apply {
                 putStringArray(
                     ContentResolver.QUERY_ARG_SORT_COLUMNS,
@@ -132,30 +133,44 @@ class MultiVolumeCurrentMediaQuery(private val context: Context) {
                 "${MediaStore.Images.Media._ID} ASC",
             )
         }
-        cursor?.use {
+        (cursor ?: throw IllegalStateException("MediaStore returned no image cursor.")).use {
             while (it.moveToNext() && items.size <= pageSize) {
                 val id = it.getLong(0)
+                val contentUri = collection.buildUpon()
+                    .appendPath(id.toString())
+                    .build()
+                val relativePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    it.getStringOrNull(MediaStore.Images.Media.RELATIVE_PATH)
+                } else null
+                val bucketName = it.getStringOrNull(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                val artifactKind = recoveryArtifactKind(relativePath, bucketName)
+                val artifactSignature = if (artifactKind != null) {
+                    signatureInspector.inspect(contentUri).takeIf { result ->
+                        result.state == "valid" && result.width != null && result.height != null
+                    }
+                } else null
                 items += mapOf(
                     "mediaStoreId" to id,
-                    "contentUri" to collection.buildUpon()
-                        .appendPath(id.toString())
-                        .build()
-                        .toString(),
+                    "contentUri" to contentUri.toString(),
                     "displayName" to it.getStringOrNull(MediaStore.Images.Media.DISPLAY_NAME),
-                    "mimeType" to it.getStringOrNull(MediaStore.Images.Media.MIME_TYPE),
+                    "mimeType" to (artifactSignature?.mimeType
+                        ?: it.getStringOrNull(MediaStore.Images.Media.MIME_TYPE)),
                     "storageVolumeName" to volumeName,
                     "byteSize" to it.getLongOrNull(MediaStore.Images.Media.SIZE),
-                    "width" to it.getIntOrNull(MediaStore.Images.Media.WIDTH),
-                    "height" to it.getIntOrNull(MediaStore.Images.Media.HEIGHT),
+                    "width" to (artifactSignature?.width
+                        ?: it.getIntOrNull(MediaStore.Images.Media.WIDTH)),
+                    "height" to (artifactSignature?.height
+                        ?: it.getIntOrNull(MediaStore.Images.Media.HEIGHT)),
                     "dateTaken" to it.getLongOrNull(MediaStore.Images.Media.DATE_TAKEN),
                     // MediaStore stores these two legacy columns in seconds.
                     "dateAdded" to it.getSecondsAsMillisOrNull(MediaStore.Images.Media.DATE_ADDED),
                     "dateModified" to it.getSecondsAsMillisOrNull(MediaStore.Images.Media.DATE_MODIFIED),
-                    "relativePath" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        it.getStringOrNull(MediaStore.Images.Media.RELATIVE_PATH)
-                    } else null,
-                    "bucketName" to it.getStringOrNull(MediaStore.Images.Media.BUCKET_DISPLAY_NAME),
+                    "relativePath" to relativePath,
+                    "bucketName" to bucketName,
                     "orientationDegrees" to it.getIntOrNull(MediaStore.Images.Media.ORIENTATION),
+                    "recoveryArtifactFormat" to artifactSignature?.format,
+                    "isThumbnailArtifact" to (artifactSignature != null && artifactKind == "thumbnail"),
+                    "isCacheArtifact" to (artifactSignature != null && artifactKind == "cache"),
                 )
             }
         }
@@ -178,6 +193,24 @@ class MultiVolumeCurrentMediaQuery(private val context: Context) {
 
     private fun failure(code: String, message: String): Map<String, Any?> =
         mapOf("status" to "failure", "code" to code, "message" to message)
+
+    private fun recoveryArtifactKind(relativePath: String?, bucketName: String?): String? {
+        val segments = (relativePath ?: bucketName ?: return null)
+            .replace('\\', '/')
+            .lowercase()
+            .split('/')
+            .filter { it.isNotEmpty() }
+        if (segments.any {
+                it == ".thumbnails" || it == "thumbnails" ||
+                    it == "thumbnail" || it == "thumbcache"
+            }) return "thumbnail"
+        if (segments.any {
+                it == ".cache" || it == "cache" ||
+                    it == ".preview" || it == "preview" ||
+                    it == ".previews" || it == "previews"
+            }) return "cache"
+        return null
+    }
 
     private fun android.database.Cursor.getStringOrNull(column: String): String? =
         getColumnIndex(column).takeIf { it >= 0 }?.let { index ->

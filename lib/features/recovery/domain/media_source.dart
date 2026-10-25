@@ -4,7 +4,6 @@ enum MediaSource {
   downloadsSavedMedia,
   messagingSharedMedia,
   sdCard,
-  customFolder,
   recoveryShield,
   unknown,
 }

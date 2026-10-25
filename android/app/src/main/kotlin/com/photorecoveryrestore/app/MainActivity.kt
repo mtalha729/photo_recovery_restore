@@ -16,6 +16,8 @@ import org.json.JSONObject
 class MainActivity : FlutterActivity() {
     private var systemTrashRestoreCoordinator: SystemTrashRestoreCoordinator? = null
     private var folderTreeSelectionCoordinator: FolderTreeSelectionCoordinator? = null
+    private var authorizedFolderMediaQuery: AuthorizedFolderMediaQuery? = null
+    private var deepStorageQuery: DeepStorageRecoveryQuery? = null
     private var mediaAccessCoordinator: MediaAccessCoordinator? = null
     private var recoveryShieldSelectionCoordinator: RecoveryShieldSelectionCoordinator? = null
     private var smartCleanupDeletionCoordinator: SmartCleanupDeletionCoordinator? = null
@@ -23,12 +25,14 @@ class MainActivity : FlutterActivity() {
     private val mediaInventoryExecutor = Executors.newSingleThreadExecutor()
     private val thumbnailExecutor = Executors.newFixedThreadPool(2)
     private val cleanupExecutor = Executors.newSingleThreadExecutor()
+    private val recoveryShieldExecutor = Executors.newSingleThreadExecutor()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         systemTrashRestoreCoordinator = SystemTrashRestoreCoordinator(this, contentResolver)
         folderTreeSelectionCoordinator = FolderTreeSelectionCoordinator(this)
+        authorizedFolderMediaQuery = AuthorizedFolderMediaQuery(this)
         mediaAccessCoordinator = MediaAccessCoordinator(this)
         smartCleanupDeletionCoordinator = SmartCleanupDeletionCoordinator(this, contentResolver)
 
@@ -77,6 +81,7 @@ class MainActivity : FlutterActivity() {
                 ?: result.success(mapOf("deletedIds" to emptyList<String>(), "unavailableIds" to emptyList<String>(), "cancelled" to false))
         }
         val deepStorageQuery = DeepStorageRecoveryQuery(this)
+        this.deepStorageQuery = deepStorageQuery
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             DEEP_STORAGE_RECOVERY_CHANNEL,
@@ -88,18 +93,26 @@ class MainActivity : FlutterActivity() {
                     if (pageSize == null || pageSize !in 1..MAXIMUM_PAGE_SIZE) {
                         result.success(failure("platformFailure", "Invalid page size."))
                     } else {
+                        val continuationToken = call.argument<String>("continuationToken")
+                        val requestGeneration = deepStorageQuery.currentCancellationGeneration()
                         deepStorageExecutor.execute {
                             val response = runCatching {
                                 deepStorageQuery.query(
                                     pageSize,
-                                    call.argument<String>("continuationToken"),
+                                    continuationToken,
                                     call.argument<String>("profile") ?: "fastDeep",
-                                    call.argument<List<*>>("currentMediaLocationKeys")
-                                        ?.mapNotNull { it as? String }
+                                    requestGeneration,
+                                    call.argument<List<String>>("existingStorageLocationKeys")
                                         ?.toSet()
-                                        .orEmpty(),
+                                        ?: emptySet(),
                                 )
                             }.getOrElse { error ->
+                                deepStorageQuery.requestCancellation(continuationToken)
+                                runCatching {
+                                    deepStorageExecutor.execute {
+                                        deepStorageQuery.cancel(continuationToken)
+                                    }
+                                }
                                 failure("platformFailure", "Photo recovery scan failed (${error.javaClass.simpleName}).")
                             }
                             runOnUiThread { result.success(response) }
@@ -107,22 +120,35 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "cancelDeepStorageScan" -> {
-                    deepStorageQuery.cancel(call.argument<String>("continuationToken"))
+                    val token = call.argument<String>("continuationToken")
+                    deepStorageQuery.requestCancellation(token)
+                    runCatching { deepStorageExecutor.execute { deepStorageQuery.cancel(token) } }
                     result.success(null)
                 }
                 "openDeepStorageAccessSettings" -> {
-                    val opened = Build.VERSION.SDK_INT < Build.VERSION_CODES.R || runCatching {
-                        startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                                Uri.parse("package:$packageName"),
-                            ),
+                    val capability = deepStorageQuery.capability()
+                    if (capability["requestSupported"] != true ||
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+                    ) {
+                        result.error(
+                            "accessNotDeclared",
+                            "This app build does not request optional All files access.",
+                            null,
                         )
-                    }.recoverCatching {
-                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                    }.isSuccess
-                    if (opened) result.success(null)
-                    else result.error("settingsUnavailable", "Photo Recovery Access settings are unavailable.", null)
+                    } else {
+                        val opened = runCatching {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    Uri.parse("package:$packageName"),
+                                ),
+                            )
+                        }.recoverCatching {
+                            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        }.isSuccess
+                        if (opened) result.success(null)
+                        else result.error("settingsUnavailable", "Photo Recovery Access settings are unavailable.", null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -212,7 +238,7 @@ class MainActivity : FlutterActivity() {
             val pageSize = call.argument<Number>("pageSize")?.toInt()
             val afterMediaStoreId = call.argument<Number>("afterMediaStoreId")?.toLong()
             val continuationToken = call.argument<String>("continuationToken")
-            if (pageSize == null || pageSize !in 1..MAXIMUM_PAGE_SIZE) {
+            if (pageSize == null || pageSize !in 1..MAXIMUM_INVENTORY_PAGE_SIZE) {
                 result.success(failure("platformFailure", "Invalid page size."))
                 return@setMethodCallHandler
             }
@@ -220,40 +246,16 @@ class MainActivity : FlutterActivity() {
             // MediaStore can contain tens of thousands of records. Keep the
             // bounded page query off Flutter's platform/UI thread.
             mediaInventoryExecutor.execute {
-                val response = MultiVolumeCurrentMediaQuery(this).query(
-                    pageSize,
-                    continuationToken,
-                    afterMediaStoreId,
-                )
-                runOnUiThread { result.success(response) }
-            }
-        }
-
-        MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            FOLDER_SCOPE_CHANNEL,
-        ).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "selectFolder" -> folderTreeSelectionCoordinator?.selectFolder(result)
-                "checkFolderGrant" -> folderTreeSelectionCoordinator?.checkGrant(
-                    call.argument<String>("treeUri"),
-                    result,
-                )
-                "getAuthorizedFolderMediaPage" -> {
-                    val pageSize = call.argument<Number>("pageSize")?.toInt()
-                    if (pageSize == null || pageSize !in 1..MAXIMUM_PAGE_SIZE) {
-                        result.success(failure("platformFailure", "Invalid page size."))
-                    } else {
-                        result.success(
-                            AuthorizedFolderMediaQuery(this).query(
-                                call.argument<String>("treeUri"),
-                                pageSize,
-                                call.argument<String>("continuationToken"),
-                            ),
-                        )
-                    }
+                val response = runCatching {
+                    MultiVolumeCurrentMediaQuery(this).query(
+                        pageSize,
+                        continuationToken,
+                        afterMediaStoreId,
+                    )
+                }.getOrElse {
+                    failure("platformFailure", "Unable to query current media.")
                 }
-                else -> result.notImplemented()
+                runOnUiThread { result.success(response) }
             }
         }
 
@@ -271,13 +273,67 @@ class MainActivity : FlutterActivity() {
                 result.success(failure("platformFailure", "Invalid MediaStore ID."))
                 return@setMethodCallHandler
             }
-            result.success(
-                CurrentMediaMetadataQuery(contentResolver).query(
-                    mediaStoreId,
-                    call.argument<String>("storageVolumeName"),
-                    call.argument<String>("contentUri"),
-                ),
-            )
+            val volumeName = call.argument<String>("storageVolumeName")
+            val contentUri = call.argument<String>("contentUri")
+            mediaInventoryExecutor.execute {
+                val response = runCatching {
+                    CurrentMediaMetadataQuery(contentResolver).query(
+                        mediaStoreId,
+                        volumeName,
+                        contentUri,
+                    )
+                }.getOrElse {
+                    failure("platformFailure", "Unable to query current-media metadata.")
+                }
+                runOnUiThread { result.success(response) }
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            FOLDER_SCOPE_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "selectFolder" -> folderTreeSelectionCoordinator?.selectFolder(result)
+                    ?: result.success(failure("platformFailure", "Folder selection is unavailable."))
+                "selectDestinationFolder" ->
+                    folderTreeSelectionCoordinator?.selectDestinationFolder(result)
+                        ?: result.success(failure("platformFailure", "Folder selection is unavailable."))
+                "checkFolderGrant" -> folderTreeSelectionCoordinator?.checkGrant(
+                    call.argument<String>("treeUri"),
+                    result,
+                ) ?: result.success(failure("platformFailure", "Folder permission is unavailable."))
+                "getAuthorizedFolderMediaPage" -> {
+                    val pageSize = call.argument<Number>("pageSize")?.toInt()
+                    if (pageSize == null || pageSize !in 1..MAXIMUM_PAGE_SIZE) {
+                        result.success(failure("platformFailure", "Invalid folder page size."))
+                    } else {
+                        val query = authorizedFolderMediaQuery
+                        val treeUri = call.argument<String>("treeUri")
+                        val continuationToken = call.argument<String>("continuationToken")
+                        val requestGeneration = query?.currentCancellationGeneration()
+                        deepStorageExecutor.execute {
+                            val response = query?.query(
+                                treeUri,
+                                pageSize,
+                                continuationToken,
+                                requestGeneration ?: 0L,
+                            ) ?: failure("platformFailure", "Folder scanning is unavailable.")
+                            runOnUiThread { result.success(response) }
+                        }
+                    }
+                }
+                "cancelAuthorizedFolderScan" -> {
+                    val token = call.argument<String>("continuationToken")
+                    val query = authorizedFolderMediaQuery
+                    query?.requestCancellation(token)
+                    if (query != null) {
+                        runCatching { deepStorageExecutor.execute { query.cancel(token) } }
+                    }
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
         }
 
         MethodChannel(
@@ -296,13 +352,18 @@ class MainActivity : FlutterActivity() {
                 result.success(failure("platformFailure", "Invalid page size."))
                 return@setMethodCallHandler
             }
-            result.success(
-                VerifiedTrashQuery(this).query(
-                    pageSize,
-                    continuationToken,
-                    afterMediaStoreId,
-                ),
-            )
+            deepStorageExecutor.execute {
+                val response = runCatching {
+                    VerifiedTrashQuery(this).query(
+                        pageSize,
+                        continuationToken,
+                        afterMediaStoreId,
+                    )
+                }.getOrElse {
+                    failure("platformFailure", "Unable to query verified media trash.")
+                }
+                runOnUiThread { result.success(response) }
+            }
         }
 
         MethodChannel(
@@ -338,6 +399,7 @@ class MainActivity : FlutterActivity() {
         recoveryShieldSelectionCoordinator = RecoveryShieldSelectionCoordinator(
             this,
             recoveryShieldStorage,
+            recoveryShieldExecutor,
         )
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -347,9 +409,17 @@ class MainActivity : FlutterActivity() {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
-            result.success(
-                recoveryShieldStorage.protect(call.arguments as? Map<*, *>),
-            )
+            recoveryShieldExecutor.execute {
+                val response = runCatching {
+                    recoveryShieldStorage.protect(call.arguments as? Map<*, *>)
+                }.getOrElse {
+                    mapOf(
+                        "status" to "platformFailure",
+                        "message" to "Unable to protect the selected copy.",
+                    )
+                }
+                runOnUiThread { result.success(response) }
+            }
         }
 
         MethodChannel(
@@ -357,15 +427,36 @@ class MainActivity : FlutterActivity() {
             RECOVERY_SHIELD_MANAGEMENT_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "getShieldItems" -> result.success(recoveryShieldStorage.items())
+                "getShieldItems" -> recoveryShieldExecutor.execute {
+                    val items = try {
+                        recoveryShieldStorage.items()
+                    } catch (_: Exception) {
+                        runOnUiThread {
+                            result.error(
+                                "shieldStorageFailure",
+                                "Unable to load Recovery Shield records.",
+                                null,
+                            )
+                        }
+                        return@execute
+                    }
+                    runOnUiThread { result.success(items) }
+                }
                 "protectSelectedPhotos" -> recoveryShieldSelectionCoordinator?.select(result)
                     ?: result.success(0)
-                "unprotectItems" -> result.success(
-                    recoveryShieldStorage.unprotect(
-                        call.argument<List<String>>("protectionIds") ?: emptyList(),
-                    ),
-                )
-                "clearShield" -> result.success(recoveryShieldStorage.clear())
+                "unprotectItems" -> {
+                    val protectionIds = call.argument<List<String>>("protectionIds") ?: emptyList()
+                    recoveryShieldExecutor.execute {
+                        val removed = runCatching {
+                            recoveryShieldStorage.unprotect(protectionIds)
+                        }.getOrDefault(false)
+                        runOnUiThread { result.success(removed) }
+                    }
+                }
+                "clearShield" -> recoveryShieldExecutor.execute {
+                    val cleared = runCatching { recoveryShieldStorage.clear() }.getOrDefault(false)
+                    runOnUiThread { result.success(cleared) }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -442,17 +533,23 @@ class MainActivity : FlutterActivity() {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
-            result.success(
-                recoveryShieldRestorer.restore(call.arguments as? Map<*, *>),
-            )
+            recoveryShieldExecutor.execute {
+                val response = runCatching {
+                    recoveryShieldRestorer.restore(call.arguments as? Map<*, *>)
+                }.getOrElse {
+                    mapOf(
+                        "status" to "platformFailure",
+                        "message" to "Unable to restore protected media.",
+                    )
+                }
+                runOnUiThread { result.success(response) }
+            }
         }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         if (recoveryShieldSelectionCoordinator?.handleActivityResult(requestCode, resultCode, data) == true) return
-        if (folderTreeSelectionCoordinator?.handleActivityResult(requestCode, resultCode, data) == true) {
-            return
-        }
+        if (folderTreeSelectionCoordinator?.handleActivityResult(requestCode, resultCode, data) == true) return
         if (smartCleanupDeletionCoordinator?.handleActivityResult(requestCode, resultCode) == true) return
         if (systemTrashRestoreCoordinator?.handleActivityResult(requestCode, resultCode) == true) {
             return
@@ -470,18 +567,35 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        folderTreeSelectionCoordinator?.dispose()
-        folderTreeSelectionCoordinator = null
         systemTrashRestoreCoordinator?.dispose()
         systemTrashRestoreCoordinator = null
+        folderTreeSelectionCoordinator?.dispose()
+        folderTreeSelectionCoordinator = null
+        val folderMediaQuery = authorizedFolderMediaQuery
+        val storageQuery = deepStorageQuery
+        folderMediaQuery?.requestCancellation(null)
+        storageQuery?.requestCancellation(null)
+        if (folderMediaQuery != null || storageQuery != null) {
+            runCatching {
+                deepStorageExecutor.execute {
+                    folderMediaQuery?.cancel(null)
+                    storageQuery?.cancel(null)
+                }
+            }
+        }
+        authorizedFolderMediaQuery = null
+        deepStorageQuery = null
         mediaAccessCoordinator?.dispose()
         mediaAccessCoordinator = null
         recoveryShieldSelectionCoordinator?.dispose()
         recoveryShieldSelectionCoordinator = null
-        deepStorageExecutor.shutdownNow()
+        // Allow the queued cursor cleanup to run after an active page observes
+        // the cancellation request; the executor is still shut down promptly.
+        deepStorageExecutor.shutdown()
         mediaInventoryExecutor.shutdownNow()
         thumbnailExecutor.shutdownNow()
         cleanupExecutor.shutdownNow()
+        recoveryShieldExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -634,8 +748,6 @@ class MainActivity : FlutterActivity() {
             "com.photorecoveryrestore.app/verified_trash_discovery"
         private const val SYSTEM_TRASH_RESTORE_CHANNEL =
             "com.photorecoveryrestore.app/system_trash_restore"
-        private const val FOLDER_SCOPE_CHANNEL =
-            "com.photorecoveryrestore.app/folder_scope"
         private const val RECOVERY_SHIELD_CHANNEL =
             "com.photorecoveryrestore.app/recovery_shield"
         private const val RECOVERY_SHIELD_RESTORE_CHANNEL =
@@ -643,6 +755,8 @@ class MainActivity : FlutterActivity() {
         private const val RECOVERED_PHOTOS_CHANNEL =
             "com.photorecoveryrestore.app/recovered_photos"
         private const val MAXIMUM_PAGE_SIZE = 200
+        private const val FOLDER_SCOPE_CHANNEL = "com.photorecoveryrestore.app/folder_scope"
+        private const val MAXIMUM_INVENTORY_PAGE_SIZE = 500
         private const val MAXIMUM_RECOVERED_PHOTO_HISTORY = 500
         private const val MEDIA_ACCESS_CHANNEL =
             "com.photorecoveryrestore.app/media_access"

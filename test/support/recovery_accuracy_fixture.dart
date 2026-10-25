@@ -106,7 +106,6 @@ RecoveryAccuracyFixture buildMixedAccuracyFixture() {
     ('download-deleted', MediaSource.downloadsSavedMedia),
     ('messaging-deleted', MediaSource.messagingSharedMedia),
     ('sd-deleted', MediaSource.sdCard),
-    ('custom-deleted', MediaSource.customFolder),
   ]) {
     add(
       id: entry.$1,

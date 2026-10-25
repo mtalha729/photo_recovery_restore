@@ -23,7 +23,7 @@ class SystemTrashRestorePolicy {
         reason: SystemTrashRestoreEligibilityReason.unsupportedPlatform,
       );
     }
-    if (classification == RecoveryClassification.protectedDeleted) {
+    if (classification == RecoveryClassification.protectedCopy) {
       return const SystemTrashRestoreEligibility(
         reason: SystemTrashRestoreEligibilityReason.protectedRestoreUnavailable,
       );

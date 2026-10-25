@@ -135,15 +135,53 @@ void main() {
     },
   );
 
-  test('repeated continuation exhausts instead of looping', () async {
+  test('repeated continuation stops as partial instead of claiming complete', () async {
     final summary = await scanner.scan(
       pageSize: 1,
       loadPage: (_) async => page(start: 0, count: 1, next: 1),
       consumePage: (_) async {},
       cancellationToken: ScanCancellationToken(),
     );
-    expect(summary.completion, RecoveryScanCompletion.completed);
+    expect(summary.completion, RecoveryScanCompletion.failed);
     expect(summary.progress.pageCount, 2);
+    expect(summary.failure?.message, contains('coverage is partial'));
+  });
+
+  test('total page safety limit is explicit and preserves prior pages', () async {
+    const boundedScanner = PaginatedRecoveryScanner(maximumPageCount: 2);
+    var loadedPages = 0;
+    final summary = await boundedScanner.scan(
+      pageSize: 1,
+      loadPage: (request) async {
+        loadedPages++;
+        final id = request.afterMediaStoreId ?? 0;
+        return page(start: id, count: 1, next: id + 1);
+      },
+      consumePage: (_) async {},
+      cancellationToken: ScanCancellationToken(),
+    );
+    expect(loadedPages, 2);
+    expect(summary.completion, RecoveryScanCompletion.failed);
+    expect(summary.progress.pageCount, 2);
+    expect(summary.failure?.message, contains('2-page safety limit'));
+  });
+
+  test('controller-facing stop predicate avoids extra page requests', () async {
+    var loadedPages = 0;
+    final summary = await scanner.scan(
+      pageSize: 1,
+      loadPage: (request) async {
+        loadedPages++;
+        final id = request.afterMediaStoreId ?? 0;
+        return page(start: id, count: 1, next: id + 1);
+      },
+      consumePage: (_) async {},
+      cancellationToken: ScanCancellationToken(),
+      shouldStopAfterPage: () => true,
+    );
+    expect(loadedPages, 1);
+    expect(summary.completion, RecoveryScanCompletion.failed);
+    expect(summary.failure?.message, contains('memory limit'));
   });
 
   test('duplicate resolver index is deterministic after optimization', () {

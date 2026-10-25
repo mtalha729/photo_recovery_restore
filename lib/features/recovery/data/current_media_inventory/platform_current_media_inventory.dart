@@ -9,7 +9,7 @@ class PlatformCurrentMediaInventory implements CurrentMediaInventory {
 
   static const _channelName =
       'com.photorecoveryrestore.app/current_media_inventory';
-  static const _maximumPageSize = 200;
+  static const _maximumPageSize = 500;
 
   final MethodChannel _channel;
 
@@ -130,12 +130,14 @@ class CurrentMediaInventoryPlatformMapper {
       relativePath: _nullableText(value['relativePath']),
       bucketName: _nullableText(value['bucketName']),
       orientationDegrees: _nullableInt(value['orientationDegrees']),
+      recoveryArtifactFormat: _nullableText(value['recoveryArtifactFormat']),
+      isThumbnailArtifact: value['isThumbnailArtifact'] == true,
+      isCacheArtifact: value['isCacheArtifact'] == true,
     );
   }
 
-  static int? _nullableInt(Object? value) => value is int && value >= 0
-      ? value
-      : null;
+  static int? _nullableInt(Object? value) =>
+      value is int && value >= 0 ? value : null;
 
   static String? _nullableText(Object? value) {
     if (value is! String) return null;

@@ -3,13 +3,32 @@ class DeepRecoveryDiagnostics {
     this.androidApiLevel,
     this.accessMode = 'unknown',
     this.deepCapabilityState = 'unknown',
+    this.currentMediaInventoryState = 'notStarted',
+    this.verifiedTrashProviderState = 'notStarted',
+    this.deepProviderState = 'notRequested',
+    this.mediaInventoryPages = 0,
+    this.verifiedTrashPages = 0,
+    this.deepProviderPages = 0,
+    this.selectedFolderProviderState = 'notRequested',
+    this.selectedFolderPages = 0,
+    this.selectedFolderCopies = 0,
     this.allFilesAccessGranted = false,
     this.volumesScanned = const {},
+    this.rootDirectoriesOpened = 0,
+    this.signatureFilesInspected = 0,
     this.foldersVisited = 0,
     this.filesExamined = 0,
     this.currentRecordsScanned = 0,
+    this.mediaStoreRowsReturned = 0,
+    this.currentPhotosMapped = 0,
+    this.currentRowsRejected = 0,
+    this.currentDuplicatesSuppressed = 0,
     this.trashCandidates = 0,
-    this.safDocumentsScanned = 0,
+    this.rawTrashRows = 0,
+    this.deepRecordsDiscovered = 0,
+    this.mediaStoreArtifactsDiscovered = 0,
+    this.lowerPriorityRecordsOmitted = 0,
+    this.inaccessibleTrashRows = 0,
     this.unindexedFilesFound = 0,
     this.signatureMatches = 0,
     this.standaloneImageCandidates = 0,
@@ -19,12 +38,15 @@ class DeepRecoveryDiagnostics {
     this.excludedExisting = 0,
     this.duplicateRecordsSuppressed = 0,
     this.invalidFilesRejected = 0,
+    this.ineligibleRecordsRejected = 0,
     this.unavailableFiles = 0,
+    this.unavailableDirectories = 0,
     this.unsupportedFiles = 0,
     this.sourceFilteredItems = 0,
     this.finalVerifiedDeleted = 0,
     this.finalFullQualityCopies = 0,
     this.finalReducedCopies = 0,
+    this.finalUnknownQualityCopies = 0,
     this.finalThumbnailCopies = 0,
     this.unknownSourceRetained = 0,
     this.trashLikeCandidates = 0,
@@ -52,13 +74,32 @@ class DeepRecoveryDiagnostics {
   final int? androidApiLevel;
   final String accessMode;
   final String deepCapabilityState;
+  final String currentMediaInventoryState;
+  final String verifiedTrashProviderState;
+  final String deepProviderState;
+  final int mediaInventoryPages;
+  final int verifiedTrashPages;
+  final int deepProviderPages;
+  final String selectedFolderProviderState;
+  final int selectedFolderPages;
+  final int selectedFolderCopies;
   final bool allFilesAccessGranted;
   final Set<String> volumesScanned;
+  final int rootDirectoriesOpened;
+  final int signatureFilesInspected;
   final int foldersVisited;
   final int filesExamined;
   final int currentRecordsScanned;
+  final int mediaStoreRowsReturned;
+  final int currentPhotosMapped;
+  final int currentRowsRejected;
+  final int currentDuplicatesSuppressed;
   final int trashCandidates;
-  final int safDocumentsScanned;
+  final int rawTrashRows;
+  final int deepRecordsDiscovered;
+  final int mediaStoreArtifactsDiscovered;
+  final int lowerPriorityRecordsOmitted;
+  final int inaccessibleTrashRows;
   final int unindexedFilesFound;
   final int signatureMatches;
   final int standaloneImageCandidates;
@@ -68,12 +109,15 @@ class DeepRecoveryDiagnostics {
   final int excludedExisting;
   final int duplicateRecordsSuppressed;
   final int invalidFilesRejected;
+  final int ineligibleRecordsRejected;
   final int unavailableFiles;
+  final int unavailableDirectories;
   final int unsupportedFiles;
   final int sourceFilteredItems;
   final int finalVerifiedDeleted;
   final int finalFullQualityCopies;
   final int finalReducedCopies;
+  final int finalUnknownQualityCopies;
   final int finalThumbnailCopies;
   final int unknownSourceRetained;
   final int trashLikeCandidates;
@@ -98,27 +142,40 @@ class DeepRecoveryDiagnostics {
   final int carvedTempBytesReclaimed;
 
   int get finalPossibleCopies =>
-      finalFullQualityCopies + finalReducedCopies + finalThumbnailCopies;
+      finalFullQualityCopies +
+      finalReducedCopies +
+      finalUnknownQualityCopies +
+      finalThumbnailCopies;
   int get visibleFinalResults => finalVerifiedDeleted + finalPossibleCopies;
+  // Native records and raw trash rows can be ordinary current originals.
+  // Only candidates retained for recovery belong in this headline count.
+  int get discoveredCandidates => finalVerifiedDeleted + copyCandidates;
+  int get rejectedCandidates =>
+      invalidFilesRejected + ineligibleRecordsRejected;
 
   String toDebugSummary() =>
-      'Deep recovery: api=${androidApiLevel ?? 'unknown'}, access=$accessMode, deep=$deepCapabilityState, allFiles=$allFilesAccessGranted, '
-      'volumes=${volumesScanned.length}, folders=$foldersVisited, '
-      'files=$filesExamined, current=$currentRecordsScanned, trash=$trashCandidates, '
-      'saf=$safDocumentsScanned, unindexed=$unindexedFilesFound, '
-      'signatures=$signatureMatches, standalone=$standaloneImageCandidates, cache=$cacheCandidates, messaging=$messagingCandidates, '
-      'copies=$copyCandidates, excludedExisting=$excludedExisting, '
+      'Recovery providers: api=${androidApiLevel ?? 'unknown'}, access=$accessMode, '
+      'currentMedia=$currentMediaInventoryState($mediaInventoryPages pages), '
+      'verifiedTrash=$verifiedTrashProviderState($verifiedTrashPages pages), '
+      'deep=$deepProviderState($deepProviderPages pages), capability=$deepCapabilityState, '
+      'selectedFolder=$selectedFolderProviderState($selectedFolderPages pages, $selectedFolderCopies copies), '
+      'allFiles=$allFilesAccessGranted, '
+      'volumesOpened=${volumesScanned.length}, rootsOpened=$rootDirectoriesOpened, foldersOpened=$foldersVisited, '
+      'files=$filesExamined, current=$currentRecordsScanned, mediaStoreRows=$mediaStoreRowsReturned, currentMapped=$currentPhotosMapped, currentRejected=$currentRowsRejected, currentDuplicates=$currentDuplicatesSuppressed, trash=$trashCandidates/$rawTrashRows, inaccessibleTrash=$inaccessibleTrashRows, '
+      'candidateCounts: discovered=$discoveredCandidates, rejected=$rejectedCandidates, duplicates=$duplicateRecordsSuppressed, possibleRecoverable=$finalPossibleCopies, verifiedDeleted=$finalVerifiedDeleted, mediaStoreArtifacts=$mediaStoreArtifactsDiscovered, '
+      'deepRecordsRetained=$signatureMatches, standalone=$standaloneImageCandidates, cache=$cacheCandidates, messaging=$messagingCandidates, '
+      'copies=$copyCandidates, excludedExisting=$excludedExisting, lowerPriorityOmitted=$lowerPriorityRecordsOmitted, '
       'duplicates=$duplicateRecordsSuppressed, invalid=$invalidFilesRejected, '
-      'unavailable=$unavailableFiles, unsupported=$unsupportedFiles, sourceFiltered=$sourceFilteredItems, '
+      'unavailableFiles=$unavailableFiles, unavailableDirs=$unavailableDirectories, unsupported=$unsupportedFiles, sourceFiltered=$sourceFilteredItems, '
       'verifiedDeleted=$finalVerifiedDeleted, fullCopies=$finalFullQualityCopies, '
-      'reducedCopies=$finalReducedCopies, thumbnails=$finalThumbnailCopies, '
+      'reducedCopies=$finalReducedCopies, unknownQualityCopies=$finalUnknownQualityCopies, thumbnails=$finalThumbnailCopies, '
       'unknownRetained=$unknownSourceRetained, trashLike=$trashLikeCandidates, '
       'thumbnailCandidates=$thumbnailCandidates, removable=$removableCandidates, '
       'misnamed=$extensionMismatchCandidates, embedded=$embeddedPayloads, duplicateDirs=$duplicateDirectorySkips, '
       'repeatedCursors=$repeatedCursorDetections, completion=$completionReason, '
       'visible=$visibleFinalResults, '
       'inventoryMs=$mediaInventoryMs, indexMs=$existingIndexBuildMs, nativeMs=$nativeTraversalMs, '
-      'entries=$entriesExamined, currentSkipped=$currentFilesSkipped, cacheHits=$signatureCacheHits, cacheMisses=$signatureCacheMisses, carvedBytes=$carvedTemporaryBytes, reclaimedCarvedBytes=$carvedTempBytesReclaimed, '
+      'entries=$entriesExamined, currentSkipped=$currentFilesSkipped, signaturesInspected=$signatureFilesInspected, cacheHits=$signatureCacheHits, cacheMisses=$signatureCacheMisses, carvedBytes=$carvedTemporaryBytes, reclaimedCarvedBytes=$carvedTempBytesReclaimed, '
       'elapsedMs=${elapsed.inMilliseconds}';
 }
 
@@ -127,13 +184,32 @@ class DeepRecoveryDiagnosticsBuilder {
   int? androidApiLevel;
   String accessMode = 'unknown';
   String deepCapabilityState = 'unknown';
+  String currentMediaInventoryState = 'notStarted';
+  String verifiedTrashProviderState = 'notStarted';
+  String deepProviderState = 'notRequested';
+  int mediaInventoryPages = 0;
+  int verifiedTrashPages = 0;
+  int deepProviderPages = 0;
+  String selectedFolderProviderState = 'notRequested';
+  int selectedFolderPages = 0;
+  int selectedFolderCopies = 0;
   bool allFilesAccessGranted = false;
   final Set<String> volumesScanned = {};
+  int rootDirectoriesOpened = 0;
+  int signatureFilesInspected = 0;
   int foldersVisited = 0;
   int filesExamined = 0;
   int currentRecordsScanned = 0;
+  int mediaStoreRowsReturned = 0;
+  int currentPhotosMapped = 0;
+  int currentRowsRejected = 0;
+  int currentDuplicatesSuppressed = 0;
   int trashCandidates = 0;
-  int safDocumentsScanned = 0;
+  int rawTrashRows = 0;
+  int deepRecordsDiscovered = 0;
+  int mediaStoreArtifactsDiscovered = 0;
+  int lowerPriorityRecordsOmitted = 0;
+  int inaccessibleTrashRows = 0;
   int unindexedFilesFound = 0;
   int signatureMatches = 0;
   int standaloneImageCandidates = 0;
@@ -143,12 +219,15 @@ class DeepRecoveryDiagnosticsBuilder {
   int excludedExisting = 0;
   int duplicateRecordsSuppressed = 0;
   int invalidFilesRejected = 0;
+  int ineligibleRecordsRejected = 0;
   int unavailableFiles = 0;
+  int unavailableDirectories = 0;
   int unsupportedFiles = 0;
   int sourceFilteredItems = 0;
   int finalVerifiedDeleted = 0;
   int finalFullQualityCopies = 0;
   int finalReducedCopies = 0;
+  int finalUnknownQualityCopies = 0;
   int finalThumbnailCopies = 0;
   int unknownSourceRetained = 0;
   int trashLikeCandidates = 0;
@@ -178,13 +257,32 @@ class DeepRecoveryDiagnosticsBuilder {
     androidApiLevel: androidApiLevel,
     accessMode: accessMode,
     deepCapabilityState: deepCapabilityState,
+    currentMediaInventoryState: currentMediaInventoryState,
+    verifiedTrashProviderState: verifiedTrashProviderState,
+    deepProviderState: deepProviderState,
+    mediaInventoryPages: mediaInventoryPages,
+    verifiedTrashPages: verifiedTrashPages,
+    deepProviderPages: deepProviderPages,
+    selectedFolderProviderState: selectedFolderProviderState,
+    selectedFolderPages: selectedFolderPages,
+    selectedFolderCopies: selectedFolderCopies,
     allFilesAccessGranted: allFilesAccessGranted,
     volumesScanned: Set.unmodifiable(volumesScanned),
+    rootDirectoriesOpened: rootDirectoriesOpened,
+    signatureFilesInspected: signatureFilesInspected,
     foldersVisited: foldersVisited,
     filesExamined: filesExamined,
     currentRecordsScanned: currentRecordsScanned,
+    mediaStoreRowsReturned: mediaStoreRowsReturned,
+    currentPhotosMapped: currentPhotosMapped,
+    currentRowsRejected: currentRowsRejected,
+    currentDuplicatesSuppressed: currentDuplicatesSuppressed,
     trashCandidates: trashCandidates,
-    safDocumentsScanned: safDocumentsScanned,
+    rawTrashRows: rawTrashRows,
+    deepRecordsDiscovered: deepRecordsDiscovered,
+    mediaStoreArtifactsDiscovered: mediaStoreArtifactsDiscovered,
+    lowerPriorityRecordsOmitted: lowerPriorityRecordsOmitted,
+    inaccessibleTrashRows: inaccessibleTrashRows,
     unindexedFilesFound: unindexedFilesFound,
     signatureMatches: signatureMatches,
     standaloneImageCandidates: standaloneImageCandidates,
@@ -194,12 +292,15 @@ class DeepRecoveryDiagnosticsBuilder {
     excludedExisting: excludedExisting,
     duplicateRecordsSuppressed: duplicateRecordsSuppressed,
     invalidFilesRejected: invalidFilesRejected,
+    ineligibleRecordsRejected: ineligibleRecordsRejected,
     unavailableFiles: unavailableFiles,
+    unavailableDirectories: unavailableDirectories,
     unsupportedFiles: unsupportedFiles,
     sourceFilteredItems: sourceFilteredItems,
     finalVerifiedDeleted: finalVerifiedDeleted,
     finalFullQualityCopies: finalFullQualityCopies,
     finalReducedCopies: finalReducedCopies,
+    finalUnknownQualityCopies: finalUnknownQualityCopies,
     finalThumbnailCopies: finalThumbnailCopies,
     unknownSourceRetained: unknownSourceRetained,
     trashLikeCandidates: trashLikeCandidates,

@@ -75,6 +75,18 @@ void main() {
     );
   });
 
+  test('Recovery Shield copies use their dedicated restore flow', () {
+    final result = policy.evaluate(
+      request(classification: RecoveryClassification.protectedCopy),
+      androidApiLevel: 35,
+    );
+
+    expect(
+      result.reason,
+      SystemTrashRestoreEligibilityReason.protectedRestoreUnavailable,
+    );
+  });
+
   test('unclassified candidate is not eligible', () {
     final result = policy.evaluate(
       request(classification: RecoveryClassification.unclassified),
